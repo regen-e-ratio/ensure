@@ -1,0 +1,135 @@
+openapi: 3.1.0
+info:
+  title: Store a Note API
+  version: 1.0.0
+  description: >
+    Backend API for the single-note web app (foundation for a future deadman switch).
+    The app maintains exactly one shared note. No authentication in this version.
+servers:
+  - url: /api
+    description: API root (same-origin in dev and single-instance deploy)
+paths:
+  /note:
+    get:
+      operationId: getNote
+      summary: Get the current note
+      description: >
+        Returns the single stored note, or null when no note has been saved yet
+        (so the client can render an empty state).
+      responses:
+        "200":
+          description: The current note, or null if none exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NoteResponse"
+              examples:
+                exists:
+                  summary: A note exists
+                  value:
+                    note:
+                      text: "Remember to water the plants.\nKeys are with Sam."
+                      createdAt: "2026-06-05T09:12:00.000Z"
+                      updatedAt: "2026-06-05T10:30:00.000Z"
+                empty:
+                  summary: No note saved yet
+                  value:
+                    note: null
+    put:
+      operationId: putNote
+      summary: Create or replace the note
+      description: >
+        Saves the provided text as the single note. Creates it if none exists,
+        otherwise replaces the text in place (last-write-wins). Rejects empty/
+        whitespace-only text and text longer than 10000 characters.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NoteInput"
+            examples:
+              valid:
+                value:
+                  text: "Remember to water the plants."
+      responses:
+        "200":
+          description: The note was saved; returns the stored note.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NoteResponse"
+              example:
+                note:
+                  text: "Remember to water the plants."
+                  createdAt: "2026-06-05T09:12:00.000Z"
+                  updatedAt: "2026-06-05T10:30:00.000Z"
+        "400":
+          description: Validation failed (empty/whitespace-only, missing, or too long).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                empty:
+                  value:
+                    error: "VALIDATION_ERROR"
+                    message: "Note text is required."
+                tooLong:
+                  value:
+                    error: "VALIDATION_ERROR"
+                    message: "Note text must be at most 10000 characters."
+components:
+  schemas:
+    Note:
+      type: object
+      additionalProperties: false
+      required: [text, createdAt, updatedAt]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 10000
+          description: The note content, plain text, stored exactly as entered.
+        createdAt:
+          type: string
+          format: date-time
+          description: ISO 8601 UTC timestamp of first creation.
+        updatedAt:
+          type: string
+          format: date-time
+          description: ISO 8601 UTC timestamp of the last save.
+    NoteResponse:
+      type: object
+      additionalProperties: false
+      required: [note]
+      properties:
+        note:
+          oneOf:
+            - $ref: "#/components/schemas/Note"
+            - type: "null"
+          description: The current note, or null when none has been saved.
+    NoteInput:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 10000
+          description: >
+            Proposed note text. Must contain at least one non-whitespace character
+            (the server trims only to check emptiness; the stored value is verbatim).
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          description: Stable machine-readable error code.
+          examples: ["VALIDATION_ERROR"]
+        message:
+          type: string
+          description: Human-readable explanation suitable for display.
