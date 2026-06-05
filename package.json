@@ -1,0 +1,35 @@
+{
+  "name": "ensure",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Store a Note — single durable shared note (foundation for a deadman switch app)",
+  "workspaces": [
+    "shared",
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "gen:api": "openapi-typescript contracts/openapi.yaml -o shared/src/api.ts",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:e2e": "playwright test",
+    "lint": "eslint .",
+    "format": "prettier --check .",
+    "dev:server": "npm run dev --workspace server",
+    "dev:client": "npm run dev --workspace client",
+    "build": "npm run build --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.13.0",
+    "@playwright/test": "^1.48.0",
+    "@types/node": "^22.7.0",
+    "eslint": "^9.13.0",
+    "openapi-typescript": "^7.4.0",
+    "prettier": "^3.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.10.0",
+    "vitest": "^2.1.0"
+  }
+}

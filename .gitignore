@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Generated API types (regenerate with `npm run gen:api`)
+shared/src/api.ts
+
+# Runtime data (SQLite)
+data/
+*.db
+*.db-journal
+*.sqlite
+
+# Logs / env
+*.log
+.env*
+
+# Test / tooling artifacts
+coverage/
+playwright-report/
+test-results/
+.playwright/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
