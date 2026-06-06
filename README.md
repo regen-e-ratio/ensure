@@ -1,70 +1,129 @@
-# Ensure — Store a Note
+# Ensure
 
-A small full-stack web app that keeps a **single, durably-stored note** you can read and edit in
-place. It's the foundation for a future "deadman switch" application (where, if the user stops
-acknowledging they're alive, notes are shared with chosen contacts). This first slice deliberately
-does the basics only: one shared note, persisted in a backend database. **No accounts or
-authentication yet.**
+A small full-stack web app that keeps a **single, durably-stored note**, gated behind Google
+sign-in. (Foundation for a future "deadman switch" application.)
 
-See the full spec and plan under [`specs/001-store-notes/`](specs/001-store-notes/).
+> **Maintaining this README:** keep it to the four sections below — Architecture, Run, Manual setup,
+> Tests — and update it only when a change actually affects one of them. See the "README
+> maintenance" rule in [`CLAUDE.md`](CLAUDE.md); a `.githooks/pre-commit` hook reminds you.
 
-## Tech stack
+## Architecture
 
-TypeScript end-to-end, npm workspaces:
+A TypeScript monorepo using npm workspaces. One external service: **Google OAuth 2.0**.
 
-- **`server/`** — Express 5 + Zod validation + better-sqlite3 (single-row `note` table)
-- **`client/`** — React 18 + Vite 5
-- **`shared/`** — API types generated from the OpenAPI contract via `openapi-typescript`
-- **`e2e/`** — Playwright acceptance tests
-- **`contracts/openapi.yaml`** — the API contract (source of truth)
+### Workspaces
 
-## Prerequisites
+| Workspace        | Responsibility |
+|------------------|----------------|
+| **`shared/`**    | Types shared across the stack. `src/api.ts` is **generated** from `contracts/openapi.yaml` by `openapi-typescript` (`npm run gen:api`); `src/constants.ts` holds shared values (e.g. `NOTE_MAX_LENGTH`). |
+| **`server/`**    | Express 5 API (ESM, run via `tsx`). Zod request validation, `better-sqlite3` storage, Google SSO. |
+| **`client/`**    | React 18 SPA built with Vite 5 and `react-router-dom`. |
+| **`e2e/`**       | Playwright acceptance tests. |
+| **`contracts/`** | `openapi.yaml` — the API contract and **source of truth** for `shared/src/api.ts`. |
 
-- Node.js 22 LTS (ships with npm). Check: `node -v`.
+### Request & authentication flow
 
-## Setup
+The SPA (`:5173`) calls the API under `/api/*` (Vite proxies to the server on `:3000` in dev).
+
+- **`/api/auth/*`** (public) — sign-in and session lifecycle: `GET /google/start`,
+  `GET /google/callback`, `GET /me`, `POST /refresh`, `POST /logout`.
+- **`/api/note`** (protected by the `requireAuth` middleware) — `GET` returns the note (or `null`);
+  `PUT` upserts it. Text must be non-empty (trimmed) and at most `NOTE_MAX_LENGTH` characters, else
+  `400`. Requests without a valid session get `401`.
+
+**Sign-in** uses the server-side **OAuth 2.0 Authorization Code + PKCE** flow with Google
+(`google-auth-library`); the client secret never leaves the server. On success the server mints its
+**own session**:
+
+- a stateless **~1h access-token JWT** (`jose`), verified in-process on every protected request (no
+  DB hit on the hot path); and
+- an opaque, server-stored, **hashed refresh token** with a **24h sliding inactivity** window.
+
+Both are delivered as **httpOnly, Secure, SameSite=Lax** cookies (Secure is relaxed only in test
+mode, which runs over plain HTTP). The client's fetch wrapper performs a **silent refresh** on `401`
+then retries, so an active user is never interrupted; ≥24h of inactivity forces re-login. On the
+client, an `AuthProvider` loads `GET /api/auth/me` and a `ProtectedRoute` redirects unauthenticated
+visitors to `/login`.
+
+### Data store
+
+`better-sqlite3` (WAL, foreign keys on) at `./data/note.db` (`NOTE_DB_PATH`). Three tables:
+
+- **`note`** — a single row enforced by `CHECK (id = 1)` (`text`, `created_at`, `updated_at`).
+- **`user`** — provisioned from the Google profile (`id`, `email`, `name`, timestamps).
+- **`session`** — backs the refresh token (`token_hash` unique, `expires_at`, `last_used_at`).
+
+### Test seams (never in production)
+
+Mounted only when their env gate is set: `POST /api/test/login` (`AUTH_TEST_MODE=1`) mints a real
+session for a fake user without contacting Google, and `POST /api/test/reset`
+(`NOTE_ALLOW_TEST_RESET=1`) clears the note. These let Playwright exercise the real middleware and
+cookies while skipping Google's non-automatable consent screen.
+
+## Run
+
+Requires **Node.js 22 LTS** (`node -v`). Complete [Manual setup](#manual-setup) first (the server
+refuses to boot without valid Google/JWT config).
 
 ```bash
 npm install
-npm run gen:api   # generate shared/src/api.ts from contracts/openapi.yaml
+npm run gen:api        # contracts/openapi.yaml -> shared/src/api.ts
+npm run dev:server     # Express API on http://localhost:3000  (SQLite at ./data/note.db)
+npm run dev:client     # Vite SPA on  http://localhost:5173    (proxies /api -> :3000)
 ```
 
-## Run (development)
+Open <http://localhost:5173> → you are redirected to `/login` → **Sign in with Google** → the note
+loads and is editable. It persists across reloads and server restarts; **Sign out** returns you to
+`/login`.
 
-```bash
-npm run dev:server   # Express on http://localhost:3000 (SQLite at ./data/note.db)
-npm run dev:client   # Vite on http://localhost:5173 (proxies /api -> :3000)
+## Manual setup
+
+Two things cannot be derived from `npm install` and must be done by hand.
+
+### 1. Create a Google OAuth 2.0 client
+
+In the [Google Cloud Console](https://console.cloud.google.com/) → **APIs & Services →
+Credentials**, create an **OAuth client ID** of type **Web application**. Add this **Authorized
+redirect URI** (must match `GOOGLE_REDIRECT_URI` exactly):
+
+```text
+http://localhost:3000/api/auth/google/callback
 ```
 
-Open http://localhost:5173. With no note saved you see an empty state; write text and press
-**Save**. Reload — it persists. Restart the server — it's still there.
+Copy the generated **Client ID** and **Client secret** for the next step.
 
-## API
+### 2. Create `server/.env`
 
-| Method | Path        | Body       | Success                      | Errors |
-|--------|-------------|------------|------------------------------|--------|
-| GET    | `/api/note` | —          | `200 { note: Note \| null }` | —      |
-| PUT    | `/api/note` | `{ text }` | `200 { note: Note }`         | `400 { error, message }` for empty/whitespace or > 10000 chars |
+The server reads `server/.env` (git-ignored — **never commit secrets**); see
+[`server/.env.example`](server/.env.example). Required variables (the process won't boot if any is
+missing or malformed):
 
-`Note = { text, createdAt, updatedAt }`.
-
-## Tests & quality gates
+| Variable               | Purpose |
+|------------------------|---------|
+| `GOOGLE_CLIENT_ID`     | OAuth Web client ID from step 1. |
+| `GOOGLE_CLIENT_SECRET` | OAuth Web client secret from step 1 (stays server-side). |
+| `GOOGLE_REDIRECT_URI`  | `http://localhost:3000/api/auth/google/callback` (must match the Google client). |
+| `AUTH_JWT_SECRET`      | ≥16-char random string that signs the access-token JWT. Generate one: |
 
 ```bash
-npm test            # server (contract/integration/unit) + client (component) — Vitest
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+```
+
+**Test-only** (optional; never enable in production): `AUTH_TEST_MODE=1` mounts the test-login seam
+and `NOTE_ALLOW_TEST_RESET=1` mounts the reset route. The e2e suite sets these (and dummy Google/JWT
+values) itself — see [`playwright.config.ts`](playwright.config.ts) — so you do **not** need real
+Google credentials to run e2e.
+
+## Tests
+
+```bash
+npm test            # server + client unit/integration/contract tests (Vitest, Supertest, RTL)
 npm run typecheck   # tsc --noEmit across all workspaces
 npm run lint        # ESLint
-npm run test:e2e    # Playwright acceptance tests (see note below)
+npm run test:e2e    # Playwright acceptance tests (starts the server + client automatically)
 ```
 
-A change is ready to merge only when tests + e2e pass, `typecheck` passes, and UI changes meet the
-accessibility baseline (semantic HTML, labelled controls, keyboard navigation, WCAG AA contrast) —
-per the project [constitution](.specify/memory/constitution.md).
-
-### Running e2e locally
-
-The e2e suite starts the server and client automatically. On environments where Playwright's
-bundled Chromium isn't available, drive the system Chrome instead:
+Where Playwright's bundled Chromium is unavailable, drive system Chrome instead:
 
 ```bash
 PW_CHANNEL=chrome npm run test:e2e
@@ -73,8 +132,6 @@ PW_CHANNEL=chrome npm run test:e2e
 In CI, install the browser normally (`npx playwright install --with-deps chromium`) and run without
 `PW_CHANNEL`.
 
-## Scope (this version)
-
-In scope: one shared note; create/view/update; durable persistence; explicit Save with an
-unsaved-changes warning. Out of scope: accounts/auth, multiple notes, version history, deletion as a
-user feature, contacts, and the deadman-switch mechanism itself.
+**Merge gates** ([constitution](.specify/memory/constitution.md)): a change merges only when tests
+and e2e pass, `typecheck` passes, and UI changes meet the accessibility baseline (semantic HTML,
+labelled controls, keyboard navigation, WCAG AA contrast).
