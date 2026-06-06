@@ -20,9 +20,9 @@ export function clearNote(db: Db): void {
 
 /** Return the single stored note, or null when none has been saved yet. */
 export function getNote(db: Db): Note | null {
-  const row = db
-    .prepare("SELECT text, created_at, updated_at FROM note WHERE id = 1")
-    .get() as NoteRow | undefined;
+  const row = db.prepare("SELECT text, created_at, updated_at FROM note WHERE id = 1").get() as
+    | NoteRow
+    | undefined;
   return row ? toNote(row) : null;
 }
 

@@ -21,7 +21,18 @@ export default defineConfig({
       command: "npm run start --workspace server",
       port: 3000,
       reuseExistingServer: false,
-      env: { NOTE_DB_PATH: E2E_DB, PORT: "3000", NOTE_ALLOW_TEST_RESET: "1" },
+      env: {
+        NOTE_DB_PATH: E2E_DB,
+        PORT: "3000",
+        NOTE_ALLOW_TEST_RESET: "1",
+        // Auth is gated behind SSO; e2e never drives the real Google screen — it uses
+        // the AUTH_TEST_MODE=1 test-login seam. Dummy Google/JWT values let the server boot.
+        AUTH_TEST_MODE: "1",
+        GOOGLE_CLIENT_ID: "e2e-client-id.apps.googleusercontent.com",
+        GOOGLE_CLIENT_SECRET: "e2e-client-secret",
+        GOOGLE_REDIRECT_URI: "http://localhost:3000/api/auth/google/callback",
+        AUTH_JWT_SECRET: "e2e-jwt-secret-please-only-for-e2e-0123456789",
+      },
     },
     {
       command: "npm run dev --workspace client",

@@ -1,14 +1,14 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import request from "supertest";
-import { createApp } from "../../src/app";
-import { openDb, type Db } from "../../src/db/index";
+import type { Express } from "express";
+import { makeTestApp, loginTestUser } from "../helpers/auth";
 
-let db: Db;
-let app: ReturnType<typeof createApp>;
+let app: Express;
+let cookies: string[];
 
-beforeEach(() => {
-  db = openDb(":memory:");
-  app = createApp(db);
+beforeEach(async () => {
+  ({ app } = makeTestApp());
+  cookies = await loginTestUser(app);
 });
 
 function isIsoDate(value: unknown): boolean {
@@ -17,7 +17,7 @@ function isIsoDate(value: unknown): boolean {
 
 describe("GET /api/note contract", () => {
   it("empty case matches NoteResponse with note: null", async () => {
-    const res = await request(app).get("/api/note");
+    const res = await request(app).get("/api/note").set("Cookie", cookies);
     expect(res.status).toBe(200);
     expect(res.headers["content-type"]).toMatch(/application\/json/);
     expect(Object.keys(res.body)).toEqual(["note"]);
@@ -25,8 +25,8 @@ describe("GET /api/note contract", () => {
   });
 
   it("populated case matches NoteResponse with a Note", async () => {
-    await request(app).put("/api/note").send({ text: "x" });
-    const res = await request(app).get("/api/note");
+    await request(app).put("/api/note").set("Cookie", cookies).send({ text: "x" });
+    const res = await request(app).get("/api/note").set("Cookie", cookies);
     expect(Object.keys(res.body)).toEqual(["note"]);
     expect(Object.keys(res.body.note).sort()).toEqual(["createdAt", "text", "updatedAt"]);
     expect(typeof res.body.note.text).toBe("string");

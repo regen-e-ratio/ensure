@@ -57,3 +57,42 @@ button {
   color: var(--muted);
   font-size: 0.9rem;
 }
+
+/* Top bar on the protected note page: title + signed-in identity / sign-out. */
+.app-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.app-header__account {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+/* Shared button-style affordances (incl. links styled as buttons). */
+.button {
+  display: inline-block;
+  font: inherit;
+  padding: 0.6rem 1.1rem;
+  border-radius: 0.375rem;
+  text-decoration: none;
+  cursor: pointer;
+}
+/* "Sign in with Google": white on accent (~5.6:1, WCAG AA). */
+.button--google {
+  background: var(--accent);
+  color: #ffffff;
+  border: 1px solid var(--accent);
+}
+.button--ghost {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+.login {
+  text-align: left;
+}

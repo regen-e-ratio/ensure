@@ -1,10 +1,12 @@
 import { test, expect } from "@playwright/test";
+import { loginAs, resetNote } from "./support/auth";
 
 // US2 acceptance scenarios. Runs serially (see playwright.config.ts) starting from an empty store.
 
 test.describe.serial("view & revise the note", () => {
-  test.beforeEach(async ({ request }) => {
-    await request.post("/api/test/reset");
+  test.beforeEach(async ({ page }) => {
+    await resetNote(page);
+    await loginAs(page); // the note page is now gated behind SSO (D6 test-login seam)
   });
 
   test("shows an empty state on first visit (FR-005)", async ({ page }) => {

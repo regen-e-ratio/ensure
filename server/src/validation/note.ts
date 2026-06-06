@@ -3,7 +3,10 @@ import { NOTE_MAX_LENGTH } from "@ensure/shared/constants";
 
 const noteInputSchema = z.object({
   text: z
-    .string({ required_error: "Note text is required.", invalid_type_error: "Note text is required." })
+    .string({
+      required_error: "Note text is required.",
+      invalid_type_error: "Note text is required.",
+    })
     .max(NOTE_MAX_LENGTH, `Note text must be at most ${NOTE_MAX_LENGTH} characters.`)
     .refine((value) => value.trim().length > 0, { message: "Note text is required." }),
 });

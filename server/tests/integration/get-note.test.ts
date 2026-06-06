@@ -1,26 +1,31 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import request from "supertest";
-import { createApp } from "../../src/app";
-import { openDb, type Db } from "../../src/db/index";
+import type { Express } from "express";
+import { makeTestApp, loginTestUser } from "../helpers/auth";
 
-let db: Db;
-let app: ReturnType<typeof createApp>;
+let app: Express;
+let cookies: string[];
 
-beforeEach(() => {
-  db = openDb(":memory:");
-  app = createApp(db);
+beforeEach(async () => {
+  ({ app } = makeTestApp());
+  cookies = await loginTestUser(app);
 });
 
 describe("GET /api/note", () => {
-  it("returns { note: null } when no note has been saved (FR-005)", async () => {
+  it("requires a valid session (401 without one)", async () => {
     const res = await request(app).get("/api/note");
+    expect(res.status).toBe(401);
+  });
+
+  it("returns { note: null } when no note has been saved (FR-005)", async () => {
+    const res = await request(app).get("/api/note").set("Cookie", cookies);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ note: null });
   });
 
   it("returns the saved note with createdAt/updatedAt (FR-006, FR-007)", async () => {
-    await request(app).put("/api/note").send({ text: "Hello there" });
-    const res = await request(app).get("/api/note");
+    await request(app).put("/api/note").set("Cookie", cookies).send({ text: "Hello there" });
+    const res = await request(app).get("/api/note").set("Cookie", cookies);
     expect(res.status).toBe(200);
     expect(res.body.note.text).toBe("Hello there");
     expect(typeof res.body.note.createdAt).toBe("string");
@@ -28,9 +33,9 @@ describe("GET /api/note", () => {
   });
 
   it("reflects the latest text after an update", async () => {
-    await request(app).put("/api/note").send({ text: "first" });
-    await request(app).put("/api/note").send({ text: "second" });
-    const res = await request(app).get("/api/note");
+    await request(app).put("/api/note").set("Cookie", cookies).send({ text: "first" });
+    await request(app).put("/api/note").set("Cookie", cookies).send({ text: "second" });
+    const res = await request(app).get("/api/note").set("Cookie", cookies);
     expect(res.body.note.text).toBe("second");
   });
 });

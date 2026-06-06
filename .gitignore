@@ -17,6 +17,7 @@ data/
 # Logs / env
 *.log
 .env*
+!.env.example
 
 # Test / tooling artifacts
 coverage/
