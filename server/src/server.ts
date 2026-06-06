@@ -5,6 +5,14 @@ import { loadEnv } from "./config/env";
 import { openDb } from "./db/index";
 import { sweepExpired } from "./db/session-repo";
 
+// Load server/.env (cwd is the server workspace) for local dev. In production the
+// variables come from the real environment, so a missing .env file is not an error.
+try {
+  process.loadEnvFile();
+} catch {
+  // No .env file present — rely on the ambient environment.
+}
+
 const PORT = Number(process.env.PORT ?? 3000);
 const DB_PATH = process.env.NOTE_DB_PATH ?? "./data/note.db";
 
