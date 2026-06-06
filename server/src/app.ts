@@ -2,6 +2,7 @@ import express, { type Express } from "express";
 import cookieParser from "cookie-parser";
 import type { Db } from "./db/index";
 import type { AuthConfig } from "./config/env";
+import type { Keyring } from "./crypto/keyring";
 import { clearNote } from "./db/note-repo";
 import { createNoteRouter } from "./routes/note";
 import { createAuthRouter } from "./auth/routes";
@@ -11,6 +12,8 @@ import { createTestLoginHandler } from "./test-support/test-login";
 export interface AppOptions {
   /** Auth configuration (Google + JWT + test-mode flag). Required — the app is gated behind SSO. */
   auth: AuthConfig;
+  /** Versioned encryption keyring used to seal/open note content at rest. Required. */
+  encryption: Keyring;
   /** Enables a non-contract POST /api/test/reset route for clearing state in e2e runs. Never on in production. */
   enableTestReset?: boolean;
 }
@@ -35,7 +38,7 @@ export function createApp(db: Db, options: AppOptions): Express {
   app.use("/api/auth", createAuthRouter(db, auth, secure));
 
   const requireAuth = createRequireAuth(auth.jwtSecret);
-  app.use("/api/note", requireAuth, createNoteRouter(db));
+  app.use("/api/note", requireAuth, createNoteRouter(db, options.encryption));
 
   if (options.enableTestReset) {
     app.post("/api/test/reset", (_req, res) => {

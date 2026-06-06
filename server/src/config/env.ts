@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createKeyring, type Keyring } from "../crypto/keyring";
 
 /** Google OAuth 2.0 web-client configuration (secret stays server-side). */
 export interface GoogleConfig {
@@ -51,4 +52,32 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AuthConfig {
     },
     testMode: env.AUTH_TEST_MODE === "1",
   };
+}
+
+const encryptionSchema = z.object({
+  NOTE_ENC_KEYS: z.string().min(1, "NOTE_ENC_KEYS is required"),
+  NOTE_ENC_ACTIVE_VERSION: z.string().min(1, "NOTE_ENC_ACTIVE_VERSION is required"),
+});
+
+/**
+ * Read and validate the encryption keyring from env, building a {@link Keyring}.
+ * Throws (so the process refuses to boot — fail closed, FR-015) if the variables are
+ * missing or the keyring is malformed (key not 32 bytes, active version absent, …).
+ * Errors reference only versions/byte-lengths, never key material (FR-016). Mirrors
+ * the `AUTH_JWT_SECRET` handling so operators have one consistent secret model.
+ */
+export function loadEncryption(source: NodeJS.ProcessEnv = process.env): Keyring {
+  const parsed = encryptionSchema.safeParse(source);
+  if (!parsed.success) {
+    const details = parsed.error.issues
+      .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+      .join("; ");
+    throw new Error(`Invalid server configuration: ${details}`);
+  }
+  try {
+    return createKeyring(parsed.data.NOTE_ENC_KEYS, parsed.data.NOTE_ENC_ACTIVE_VERSION);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "invalid encryption keyring";
+    throw new Error(`Invalid server configuration: ${message}`);
+  }
 }

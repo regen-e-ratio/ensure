@@ -32,6 +32,9 @@ export default defineConfig({
         GOOGLE_CLIENT_SECRET: "e2e-client-secret",
         GOOGLE_REDIRECT_URI: "http://localhost:3000/api/auth/google/callback",
         AUTH_JWT_SECRET: "e2e-jwt-secret-please-only-for-e2e-0123456789",
+        // Deterministic single-version encryption keyring for e2e (base64 of 32 bytes).
+        NOTE_ENC_KEYS: "1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        NOTE_ENC_ACTIVE_VERSION: "1",
       },
     },
     {
