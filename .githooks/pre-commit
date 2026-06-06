@@ -1,0 +1,10 @@
+#!/bin/sh
+# README relevance reminder (feature 003-readme-rework).
+# Warns when staged changes touch README-relevant areas without updating README.md.
+# Bypass deliberately with:  git commit --no-verify
+#
+# Activated via `git config core.hooksPath .githooks` (run automatically by the
+# package.json "prepare" script on `npm install`).
+
+root=$(git rev-parse --show-toplevel)
+git diff --cached --name-only | node "$root/scripts/readme-relevance.mjs"

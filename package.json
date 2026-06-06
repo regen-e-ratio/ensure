@@ -10,9 +10,11 @@
     "client"
   ],
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks || true",
     "gen:api": "openapi-typescript contracts/openapi.yaml -o shared/src/api.ts",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present && npm run test:hooks",
+    "test:hooks": "node --test scripts/__tests__/*.test.mjs",
     "test:e2e": "playwright test",
     "lint": "eslint .",
     "format": "prettier --check .",
