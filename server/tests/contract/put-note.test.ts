@@ -1,14 +1,14 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import request from "supertest";
-import { createApp } from "../../src/app";
-import { openDb, type Db } from "../../src/db/index";
+import type { Express } from "express";
+import { makeTestApp, loginTestUser } from "../helpers/auth";
 
-let db: Db;
-let app: ReturnType<typeof createApp>;
+let app: Express;
+let cookies: string[];
 
-beforeEach(() => {
-  db = openDb(":memory:");
-  app = createApp(db);
+beforeEach(async () => {
+  ({ app } = makeTestApp());
+  cookies = await loginTestUser(app);
 });
 
 // Asserts PUT /api/note responses conform to contracts/openapi.yaml
@@ -19,7 +19,7 @@ function isIsoDate(value: unknown): boolean {
 
 describe("PUT /api/note contract", () => {
   it("success response matches the NoteResponse schema", async () => {
-    const res = await request(app).put("/api/note").send({ text: "hello" });
+    const res = await request(app).put("/api/note").set("Cookie", cookies).send({ text: "hello" });
     expect(res.status).toBe(200);
     expect(res.headers["content-type"]).toMatch(/application\/json/);
     expect(Object.keys(res.body)).toEqual(["note"]);
@@ -32,7 +32,7 @@ describe("PUT /api/note contract", () => {
   });
 
   it("validation failure matches the Error schema", async () => {
-    const res = await request(app).put("/api/note").send({ text: "" });
+    const res = await request(app).put("/api/note").set("Cookie", cookies).send({ text: "" });
     expect(res.status).toBe(400);
     expect(Object.keys(res.body).sort()).toEqual(["error", "message"]);
     expect(typeof res.body.error).toBe("string");

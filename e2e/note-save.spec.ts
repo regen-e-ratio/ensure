@@ -1,7 +1,9 @@
 import { test, expect } from "@playwright/test";
+import { loginAs, resetNote } from "./support/auth";
 
-test.beforeEach(async ({ request }) => {
-  await request.post("/api/test/reset");
+test.beforeEach(async ({ page }) => {
+  await resetNote(page);
+  await loginAs(page); // the note page is now gated behind SSO (D6 test-login seam)
 });
 
 // US1: write a note, save, and confirm it persists after a page reload (SC-002).

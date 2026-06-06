@@ -40,8 +40,7 @@ export function NoteEditor() {
       })
       .catch((error) => {
         if (!active) return;
-        const message =
-          error instanceof ApiError ? error.message : "Could not load your note.";
+        const message = error instanceof ApiError ? error.message : "Could not load your note.";
         setStatus({ kind: "error", message });
       });
     return () => {

@@ -1,4 +1,5 @@
 import type { components } from "@ensure/shared/api";
+import { apiFetch } from "./http";
 
 export type Note = components["schemas"]["Note"];
 type NoteResponse = components["schemas"]["NoteResponse"];
@@ -18,7 +19,7 @@ export class ApiError extends Error {
 export async function getNote(): Promise<Note | null> {
   let res: Response;
   try {
-    res = await fetch(NOTE_URL);
+    res = await apiFetch(NOTE_URL);
   } catch {
     throw new ApiError("Could not reach the server. Please try again.");
   }
@@ -33,7 +34,7 @@ export async function getNote(): Promise<Note | null> {
 export async function putNote(text: string): Promise<Note> {
   let res: Response;
   try {
-    res = await fetch(NOTE_URL, {
+    res = await apiFetch(NOTE_URL, {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text }),

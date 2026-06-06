@@ -1,21 +1,128 @@
 openapi: 3.1.0
 info:
-  title: Store a Note API
-  version: 1.0.0
+  title: Ensure API
+  version: 2.0.0
   description: >
     Backend API for the single-note web app (foundation for a future deadman switch).
-    The app maintains exactly one shared note. No authentication in this version.
+    The app maintains exactly one shared note, now gated behind Google SSO
+    (feature 002-google-sso-auth). Sign-in is Google-only; the access token is a
+    ~1h JWT carried in an httpOnly cookie, silently refreshed while the user is active,
+    with a ~24h inactivity window.
 servers:
   - url: /api
     description: API root (same-origin in dev and single-instance deploy)
 paths:
+  /auth/google/start:
+    get:
+      operationId: authGoogleStart
+      summary: Begin Google sign-in
+      description: >
+        Sets a short-lived signed httpOnly cookie carrying the OAuth `state` and PKCE
+        code_verifier, then 302-redirects the browser to Google's consent screen. The
+        "Sign in with Google" button links here. Accepts an optional `next` query param to
+        return the user to their originally requested path after sign-in (FR-010).
+      parameters:
+        - in: query
+          name: next
+          required: false
+          schema: { type: string }
+          description: App-relative path to return to after successful sign-in.
+      responses:
+        "302":
+          description: Redirect to Google's authorization endpoint.
+
+  /auth/google/callback:
+    get:
+      operationId: authGoogleCallback
+      summary: Google OAuth redirect target
+      description: >
+        Google redirects here with `code` and `state`. The server validates `state` against the
+        handshake cookie, exchanges the code (PKCE) for tokens, verifies the ID token,
+        provisions/looks up the user, issues the access + refresh cookies, and 302-redirects into
+        the app (to `next` when present, else `/`). On failure, redirects to /login with an error
+        flag (FR-013).
+      parameters:
+        - in: query
+          name: code
+          required: false
+          schema: { type: string }
+        - in: query
+          name: state
+          required: false
+          schema: { type: string }
+        - in: query
+          name: error
+          required: false
+          schema: { type: string }
+          description: Present when the user cancelled or Google denied the request.
+      responses:
+        "302":
+          description: Redirect into the app on success, or back to /login on failure.
+
+  /auth/me:
+    get:
+      operationId: authMe
+      summary: Current authenticated user
+      description: Returns the signed-in user, or 401 if there is no valid session.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: The current user.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [user]
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+        "401":
+          description: No valid session.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
+
+  /auth/refresh:
+    post:
+      operationId: authRefresh
+      summary: Silently refresh the access token
+      description: >
+        Reads the refresh-token cookie; if the backing session exists and has not expired
+        (within the ~24h sliding inactivity window), rotates the refresh token, slides its expiry
+        forward 24h, and issues a new ~1h access-token cookie. Otherwise returns 401 and the
+        client routes the user to /login (FR-014, FR-017, SC-007, SC-008).
+      responses:
+        "204":
+          description: New access (and rotated refresh) cookies set; no body.
+        "401":
+          description: Missing/expired/revoked refresh token — re-authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "UNAUTHORIZED", message: "Session expired. Please sign in again." }
+
+  /auth/logout:
+    post:
+      operationId: authLogout
+      summary: Sign out
+      description: >
+        Deletes the current server-side session and clears both auth cookies. Idempotent —
+        returns 204 even if there was no active session (FR-012, SC-006).
+      responses:
+        "204":
+          description: Session ended and cookies cleared.
+
   /note:
     get:
       operationId: getNote
-      summary: Get the current note
+      summary: Get the current note (now protected)
       description: >
         Returns the single stored note, or null when no note has been saved yet
-        (so the client can render an empty state).
+        (so the client can render an empty state). Requires a valid access token.
+      security:
+        - sessionCookie: []
       responses:
         "200":
           description: The current note, or null if none exists.
@@ -35,13 +142,23 @@ paths:
                   summary: No note saved yet
                   value:
                     note: null
+        "401":
+          description: No valid access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
     put:
       operationId: putNote
-      summary: Create or replace the note
+      summary: Create or replace the note (now protected)
       description: >
         Saves the provided text as the single note. Creates it if none exists,
         otherwise replaces the text in place (last-write-wins). Rejects empty/
-        whitespace-only text and text longer than 10000 characters.
+        whitespace-only text and text longer than 10000 characters. Requires a valid
+        access token.
+      security:
+        - sessionCookie: []
       requestBody:
         required: true
         content:
@@ -79,8 +196,65 @@ paths:
                   value:
                     error: "VALIDATION_ERROR"
                     message: "Note text must be at most 10000 characters."
+        "401":
+          description: No valid access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
+
+  /test/login:
+    post:
+      operationId: testLogin
+      summary: "[TEST MODE ONLY] Mint a session for a fake user without contacting Google"
+      description: >
+        Mounted ONLY when AUTH_TEST_MODE=1 (never in production), mirroring the existing
+        NOTE_ALLOW_TEST_RESET / POST /api/test/reset pattern. Issues the SAME access + refresh
+        cookies as the real Google flow for a deterministic fake user, so end-to-end and contract
+        tests can exercise the real authorization middleware and cookie handling without
+        automating Google's consent screen. See research.md D6.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                sub: { type: string, description: "Fake user id (default: e2e-user)." }
+                email: { type: string, format: email }
+                name: { type: ["string", "null"] }
+      responses:
+        "204":
+          description: Access + refresh cookies set for the fake user.
+        "404":
+          description: Route is not mounted (AUTH_TEST_MODE is off).
+
 components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: access_token
+      description: >
+        httpOnly, Secure, SameSite=Lax cookie holding the ~1h access-token JWT. Set by the Google
+        callback (and by the test-login route in test mode), refreshed via POST /auth/refresh.
   schemas:
+    User:
+      type: object
+      additionalProperties: false
+      required: [id, email]
+      properties:
+        id:
+          type: string
+          description: Stable Google subject identifier (sub).
+        email:
+          type: string
+          format: email
+        name:
+          type: ["string", "null"]
+          description: Optional display name from Google.
     Note:
       type: object
       additionalProperties: false
@@ -129,7 +303,7 @@ components:
         error:
           type: string
           description: Stable machine-readable error code.
-          examples: ["VALIDATION_ERROR"]
+          examples: ["UNAUTHORIZED", "VALIDATION_ERROR"]
         message:
           type: string
           description: Human-readable explanation suitable for display.
