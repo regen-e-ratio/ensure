@@ -22,3 +22,8 @@ export async function loginAs(
 export async function resetNote(page: Page): Promise<void> {
   await page.request.post("/api/test/reset");
 }
+
+/** Clear all stored contacts (test-only reset seam) so specs start from a known state. */
+export async function resetContacts(page: Page): Promise<void> {
+  await page.request.post("/api/test/reset");
+}

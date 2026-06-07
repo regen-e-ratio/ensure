@@ -4,7 +4,9 @@ import type { Db } from "./db/index";
 import type { AuthConfig } from "./config/env";
 import type { Keyring } from "./crypto/keyring";
 import { clearNote } from "./db/note-repo";
+import { clearContacts } from "./db/contact-repo";
 import { createNoteRouter } from "./routes/note";
+import { createContactRouter } from "./routes/contact";
 import { createAuthRouter } from "./auth/routes";
 import { createRequireAuth } from "./auth/require-auth";
 import { createTestLoginHandler } from "./test-support/test-login";
@@ -39,10 +41,12 @@ export function createApp(db: Db, options: AppOptions): Express {
 
   const requireAuth = createRequireAuth(auth.jwtSecret);
   app.use("/api/note", requireAuth, createNoteRouter(db, options.encryption));
+  app.use("/api/contact", requireAuth, createContactRouter(db));
 
   if (options.enableTestReset) {
     app.post("/api/test/reset", (_req, res) => {
       clearNote(db);
+      clearContacts(db);
       res.status(204).end();
     });
   }

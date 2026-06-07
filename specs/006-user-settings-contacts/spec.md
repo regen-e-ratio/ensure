@@ -8,6 +8,15 @@
 
 **Input**: User description: "We need a user settings page. For now only one thing will be there for read and update: a list of contacts. Create the user settings page where the user can add and remove contacts. In the future a contact can be different things, like phone numbers or usernames. For now only emails will be allowed. Keep in mind the DB data structure needs to consider having multiple types of contacts."
 
+## Clarifications
+
+### Session 2026-06-07
+
+- Q: Should adding an email contact include any ownership/verification step (e.g. confirmation email), or just record the address? → A: Record only — no verification step in this release.
+- Q: Is there a maximum number of contacts a single user may store? → A: Soft cap of 50 contacts per user.
+- Q: What maximum length should an email value allow? → A: 320 characters.
+- Q: How should an email value be stored, given duplicate detection is case-insensitive? → A: Preserve the original case as entered (trimmed); duplicate detection compares a separate case-insensitive normalized form.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - View my contacts in settings (Priority: P1)
@@ -56,8 +65,11 @@ is saved and shown in the list; reload the page and confirm it persists.
    saved.
 3. **Given** a signed-in user whose list already contains a given email, **When** they
    add that same email again (ignoring case and surrounding whitespace), **Then** the
-   system does not create a duplicate and informs the user it already exists.
-4. **Given** a contact was added, **When** the user reloads the settings page, **Then**
+   system does not create a duplicate and informs the user it already exists, and the
+   originally stored value (with its original case) is retained.
+4. **Given** a signed-in user who already has 50 contacts, **When** they try to add another,
+   **Then** the add is rejected with a clear message and the list is unchanged.
+5. **Given** a contact was added, **When** the user reloads the settings page, **Then**
    the contact is still present.
 
 ---
@@ -102,8 +114,10 @@ and confirm it disappears from the list and stays gone after reload.
   release is rejected.
 - **Empty list after removal**: Removing the last contact returns the user to the empty
   state, not an error.
-- **Very long input**: Excessively long entries are rejected with a clear message rather
-  than being stored.
+- **Very long input**: Entries longer than 320 characters are rejected with a clear message
+  rather than being stored.
+- **List full**: Attempting to add a contact when the user already has 50 is rejected with a
+  clear message; the existing list is unchanged.
 
 ## Requirements *(mandatory)*
 
@@ -133,11 +147,14 @@ and confirm it disappears from the list and stays gone after reload.
 - **FR-011**: The system MUST associate every contact with exactly one owning user.
 - **FR-012**: The system MUST reject all contact read and write requests from
   unauthenticated callers without disclosing any contact data.
-- **FR-013**: The system MUST normalize stored email values (e.g. trim surrounding
-  whitespace) consistently so that display and duplicate detection are predictable.
-- **FR-014**: The system MUST enforce a reasonable upper bound on the length of a contact
-  value and reject values that exceed it.
-- **FR-015**: After a successful add or remove, the settings page MUST reflect the updated
+- **FR-013**: The system MUST store an email value with its original letter case preserved
+  (after trimming surrounding whitespace), while duplicate detection (FR-008) MUST compare a
+  separate case-insensitive normalized form so display casing and uniqueness are both predictable.
+- **FR-014**: The system MUST reject any contact value longer than 320 characters with a
+  clear message, and MUST NOT store it.
+- **FR-015**: The system MUST limit each user to at most 50 contacts and MUST reject an add
+  that would exceed this limit with a clear message.
+- **FR-016**: After a successful add or remove, the settings page MUST reflect the updated
   list to the user.
 
 ### Key Entities *(include if feature involves data)*
@@ -147,8 +164,10 @@ and confirm it disappears from the list and stays gone after reload.
 - **Contact**: A single way to reach or identify a user, owned by exactly one user. Key
   attributes: the owning user, a **type** (currently only `email`, but the attribute
   exists so future types such as `phone` or `username` can be added), the **value** (the
-  email address itself for now), and creation metadata. Uniqueness is enforced per user
-  across (type, normalized value).
+  email address as entered, trimmed, with original case preserved for display), a
+  case-insensitive **normalized form** of the value used only for duplicate detection, and
+  creation metadata. Uniqueness is enforced per user across (type, normalized value). A user
+  may hold at most 50 contacts.
 
 ## Success Criteria *(mandatory)*
 
@@ -168,6 +187,11 @@ and confirm it disappears from the list and stays gone after reload.
 - **SC-007**: Adding a second contact type in a future release requires no change to
   contacts already stored under the email type (verified by the stored data carrying an
   explicit type per contact).
+- **SC-008**: A user can store up to 50 contacts; the 51st add attempt is always rejected
+  with a clear message and never stored.
+- **SC-009**: An email saved with mixed case (e.g. `Alice@Example.com`) is displayed back
+  with that exact case, while a later add of `alice@example.com` is still detected as a
+  duplicate.
 
 ## Assumptions
 
@@ -189,8 +213,8 @@ and confirm it disappears from the list and stays gone after reload.
 - **No bulk operations**: Importing, exporting, or bulk-editing contacts is out of scope.
 - **Email is the only permitted type now**: The type attribute is stored to enable future
   types, but the system actively rejects any type other than email in this release.
-- **Reasonable list size**: A user is expected to maintain a small number of contacts;
-  no pagination is required for this release.
+- **Reasonable list size**: A user may hold at most 50 contacts (FR-015); no pagination is
+  required for this release.
 
 ## Dependencies
 

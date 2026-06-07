@@ -221,6 +221,144 @@ paths:
                 $ref: "#/components/schemas/Error"
               example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
 
+  /contact:
+    get:
+      operationId: getContacts
+      summary: Get the caller's own contact list
+      description: >
+        Returns the authenticated caller's own contacts (may be empty), ordered by
+        creation time. Contacts are always scoped to the caller — another user's
+        contacts are never returned. Requires a valid access token.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: The caller's contacts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContactListResponse"
+              examples:
+                some:
+                  summary: A few email contacts
+                  value:
+                    contacts:
+                      - id: "f3b1c2d4-0000-4000-8000-000000000001"
+                        type: "email"
+                        value: "Alice@Example.com"
+                        createdAt: "2026-06-07T09:12:00.000Z"
+                empty:
+                  summary: No contacts yet
+                  value:
+                    contacts: []
+        "401":
+          description: No valid access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
+    post:
+      operationId: addContact
+      summary: Add a contact to the caller's own list
+      description: >
+        Adds a contact (only type "email" is accepted in this release) to the caller's
+        list and returns the stored contact. The email is stored as entered (trimmed,
+        original case preserved); duplicate detection is case-insensitive. Rejects an
+        unsupported type, a malformed email, a value longer than 320 characters, a
+        duplicate, or an add that would exceed the 50-contact limit. Requires a valid
+        access token.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContactInput"
+            examples:
+              valid:
+                value:
+                  type: "email"
+                  value: "alice@example.com"
+      responses:
+        "201":
+          description: The contact was added; returns the stored contact.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Contact"
+              example:
+                id: "f3b1c2d4-0000-4000-8000-000000000001"
+                type: "email"
+                value: "alice@example.com"
+                createdAt: "2026-06-07T09:12:00.000Z"
+        "400":
+          description: Validation failed (missing fields, unsupported type, malformed email, or too long).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalidEmail:
+                  value:
+                    error: "VALIDATION_ERROR"
+                    message: "Enter a valid email address."
+                tooLong:
+                  value:
+                    error: "VALIDATION_ERROR"
+                    message: "Email must be at most 320 characters."
+        "409":
+          description: The contact already exists, or the caller has reached the 50-contact limit.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                duplicate:
+                  value:
+                    error: "DUPLICATE_CONTACT"
+                    message: "That contact is already in your list."
+                limit:
+                  value:
+                    error: "CONTACT_LIMIT_REACHED"
+                    message: "You can have at most 50 contacts."
+        "401":
+          description: No valid access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
+
+  /contact/{id}:
+    delete:
+      operationId: removeContact
+      summary: Remove a contact from the caller's own list
+      description: >
+        Removes the identified contact from the caller's list. Idempotent: returns 204
+        whether or not a matching contact existed. A contact owned by another user is
+        treated exactly like a non-existent one (204 no-op), so one user can never
+        affect or probe another's contacts. Requires a valid access token.
+      security:
+        - sessionCookie: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+          description: The id of the contact to remove.
+      responses:
+        "204":
+          description: The contact was removed, or no matching contact existed (idempotent).
+        "401":
+          description: No valid access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
+
   /test/login:
     post:
       operationId: testLogin
@@ -312,6 +450,52 @@ components:
           description: >
             Proposed note text. Must contain at least one non-whitespace character
             (the server trims only to check emptiness; the stored value is verbatim).
+    Contact:
+      type: object
+      additionalProperties: false
+      required: [id, type, value, createdAt]
+      properties:
+        id:
+          type: string
+          description: Server-assigned unique id for this contact (used to remove it).
+        type:
+          type: string
+          enum: [email]
+          description: >
+            Contact type. Only "email" is supported in this release; the field exists so
+            future types (phone, username) can be added without changing existing contacts.
+        value:
+          type: string
+          maxLength: 320
+          description: The email address as entered (trimmed, original case preserved for display).
+        createdAt:
+          type: string
+          format: date-time
+          description: ISO 8601 UTC timestamp of when the contact was added.
+    ContactInput:
+      type: object
+      additionalProperties: false
+      required: [type, value]
+      properties:
+        type:
+          type: string
+          enum: [email]
+          description: Only "email" is accepted in this release.
+        value:
+          type: string
+          minLength: 1
+          maxLength: 320
+          description: A well-formed email address.
+    ContactListResponse:
+      type: object
+      additionalProperties: false
+      required: [contacts]
+      properties:
+        contacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Contact"
+          description: The caller's contacts, ordered by creation time (may be empty).
     Error:
       type: object
       additionalProperties: false
