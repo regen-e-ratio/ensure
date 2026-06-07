@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createApp } from "./app";
 import { loadEnv, loadEncryption } from "./config/env";
+import { createEmailProvider } from "./notifications/channels/email/providers";
 import { openDb } from "./db/index";
 import { sweepExpired } from "./db/session-repo";
 
@@ -25,6 +26,10 @@ if (DB_PATH !== ":memory:") {
 // missing/invalid (fail closed, FR-015). Secrets are never logged.
 const auth = loadEnv();
 const encryption = loadEncryption();
+// Select the email provider (EMAIL_PROVIDER, default "stub" — no network send in v1).
+// Read here, like PORT/NOTE_DB_PATH, rather than in the auth env schema. An unknown
+// value throws, so a misconfiguration cannot silently fall back to not sending.
+const emailProvider = createEmailProvider(process.env.EMAIL_PROVIDER ?? "stub");
 
 const db = openDb(DB_PATH);
 // Tidy any sessions that lapsed while the server was down (no cron needed).
@@ -33,6 +38,7 @@ sweepExpired(db);
 const app = createApp(db, {
   auth,
   encryption,
+  emailProvider,
   enableTestReset: process.env.NOTE_ALLOW_TEST_RESET === "1",
 });
 

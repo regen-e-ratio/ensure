@@ -8,6 +8,16 @@
 
 **Input**: User description: "In the future it will be necessary to send notifications to users. These notifications will be emails, whatsapp messages and push notifications. Maybe more types. We need to create a generic notifications system, that will be reused everytime the system needs to send any notification. Let's start simple and create a generic notification system where only emails are allowed. Also create a page in the UI that allows to test the notifications system easily and can be extended when we have more notification types."
 
+## Clarifications
+
+### Session 2026-06-07
+
+- Q: What maximum content size should the system enforce for an Email notification before rejecting it as oversized? → A: Body ≤ 10,000 characters, subject ≤ 200 characters.
+- Q: Is an empty Email subject a validation failure, or is the subject optional? → A: Both subject and body are required; an empty/whitespace subject is rejected.
+- Q: What hard timeout should bound the email-provider call before it is reported as a timeout failure? → A: 30 seconds.
+- Q: Should the test page rate-limit/throttle sends to bound provider cost and abuse? → A: No rate limiting in v1; rely on authentication only (defer throttling to a later feature).
+- Q: What format should the Email body support — plain text, HTML, or both? → A: Both; the sender chooses plain text or HTML per send (HTML is sanitized server-side before delivery).
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Send a notification through the system (Priority: P1)
@@ -84,8 +94,8 @@ existing callers.
    as usable and any not-yet-implemented channels are presented as unavailable (cannot be selected
    to send).
 2. **Given** the selected channel is Email, **When** the user views the input fields, **Then** the
-   fields shown are those Email requires (recipient address, subject, body), establishing the
-   pattern for per-channel fields.
+   fields shown are those Email requires (recipient address, subject, body, and a body-format choice
+   of plain text or HTML), establishing the pattern for per-channel fields.
 
 ---
 
@@ -93,16 +103,17 @@ existing callers.
 
 - **Malformed recipient**: a recipient address that is not a valid email is rejected before any
   delivery attempt.
-- **Empty/whitespace content**: a request with empty required content (e.g., empty body) is rejected
-  with a validation message.
+- **Empty/whitespace content**: a request with any empty required content (an empty/whitespace
+  subject or an empty/whitespace body) is rejected with a validation message.
 - **Provider failure / timeout**: the email provider rejects the message or is unreachable — the
   system surfaces a failure outcome with a reason and does not crash or hang indefinitely.
 - **Unsupported channel requested**: a request for a channel that is not yet enabled returns a clear
   "channel not supported" outcome.
 - **Unauthenticated access**: an unauthenticated visitor cannot reach the test page or trigger a
   send; they are routed to sign-in (consistent with the rest of the app).
-- **Oversized content**: content beyond a reasonable size limit is rejected with a clear message
-  rather than being silently truncated or causing a provider error.
+- **Oversized content**: content beyond the size limit (subject > 200 characters or body > 10,000
+  characters) is rejected with a clear message rather than being silently truncated or causing a
+  provider error.
 
 ## Requirements *(mandatory)*
 
@@ -116,15 +127,19 @@ existing callers.
 - **FR-004**: System MUST be extensible so that additional channel types (e.g., WhatsApp, push) can
   be added later **without requiring changes to existing callers** of the generic capability.
 - **FR-005**: For the Email channel, the system MUST require a recipient email address and message
-  content (a subject and a body) and MUST validate the recipient address format before attempting
-  delivery.
+  content — both a non-empty subject and a non-empty body (an empty or whitespace-only subject or
+  body is rejected) — and MUST validate the recipient address format before attempting delivery.
+  The sender MUST be able to choose the body format per send: **plain text** or **HTML**.
 - **FR-006**: System MUST reject any request with missing or invalid required fields (empty
-  recipient, empty content, malformed email, oversized content) and return a validation error
-  **without attempting delivery**.
+  recipient, empty content, malformed email, or oversized content — subject exceeding 200
+  characters or body exceeding 10,000 characters) and return a validation error **without
+  attempting delivery**.
 - **FR-007**: System MUST report an explicit outcome for every send attempt — success or failure —
   and, on failure, a human-readable reason. No request may fail silently.
 - **FR-008**: System MUST handle delivery-provider errors (rejection, unavailability, timeout)
   gracefully: such errors MUST be surfaced as a failed outcome and MUST NOT crash the application.
+  The provider call MUST be bounded by a hard timeout of 30 seconds, after which the request is
+  aborted and reported as a timeout failure.
 - **FR-009**: System MUST reject a request that targets a channel which is not currently enabled,
   with a clear "channel not supported" outcome.
 - **FR-010**: System MUST provide a UI **test page** where an authenticated user can select a
@@ -133,7 +148,7 @@ existing callers.
   not-yet-enabled channels in a way that makes the extension point visible while preventing sending
   through them.
 - **FR-012**: The test page MUST adapt its input fields to the selected channel (for Email:
-  recipient address, subject, body).
+  recipient address, subject, body, and a body-format choice of plain text or HTML).
 - **FR-013**: The test page and the send capability MUST be accessible only to authenticated users,
   consistent with the rest of the application's sign-in model.
 - **FR-014**: System MUST keep delivery-provider credentials/secrets server-side only — never
@@ -141,11 +156,15 @@ existing callers.
   way that exposes sensitive data.
 - **FR-015**: The test page MUST meet the accessibility baseline: semantic markup, labelled
   controls, full keyboard navigation, and WCAG AA contrast.
+- **FR-016**: When the Email body format is HTML, the system MUST sanitize the body server-side
+  (removing scripts and unsafe markup) before handing it to the delivery provider; plain-text
+  bodies MUST be sent as plain text without HTML interpretation.
 
 ### Key Entities *(include if feature involves data)*
 
 - **Notification Request**: a single request to deliver one message to one recipient through one
-  channel. Key attributes: channel type, recipient, content (for Email: subject and body).
+  channel. Key attributes: channel type, recipient, content (for Email: subject, body, and body
+  format — plain text or HTML).
 - **Channel**: a delivery mechanism with a type (Email enabled now; WhatsApp, push planned) and an
   availability state (enabled / not yet enabled). Each channel defines which fields a request needs.
 - **Send Outcome**: the result of a send attempt — success, or failure with a human-readable reason
@@ -156,7 +175,9 @@ existing callers.
 ### Measurable Outcomes
 
 - **SC-001**: An authenticated user can send a test email from the test page and see a clear
-  success-or-failure outcome within 5 seconds of submitting.
+  success-or-failure outcome within 5 seconds of submitting on the normal (provider-responsive)
+  path; in the degraded case where the provider stalls, the outcome is reported no later than the
+  30-second provider timeout (FR-008).
 - **SC-002**: A new caller elsewhere in the system can send a notification using only the generic
   capability — supplying channel, recipient, and content — with no channel-specific delivery code in
   the caller.
@@ -183,6 +204,9 @@ existing callers.
 - **v1 does not include a persistent, browsable history or audit log** of sent notifications; the
   test page shows the immediate outcome only. (Consistent with the project's "keep it simple"
   principle.)
+- **v1 does not rate-limit or throttle sends**; access is bounded by authentication only, and
+  per-user/per-rate throttling is deferred to a later feature. (Consistent with the "keep it
+  simple" principle.)
 - **WhatsApp and push channels are out of scope for implementation in v1** but the system and test
   page are designed to accommodate them.
 - The existing application's authentication, monorepo structure, and data store are reused; this
