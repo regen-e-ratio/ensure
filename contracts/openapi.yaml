@@ -229,7 +229,11 @@ paths:
         Returns the authenticated caller's own contacts (may be empty), ordered by
         creation time. Contacts are always scoped to the caller — another user's
         contacts are never returned. Requires a valid access token.
-      description: The caller's contacts.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: The caller's contacts.
           content:
             application/json:
               schema:
@@ -257,6 +261,13 @@ paths:
         unsupported type, a malformed email, a value longer than 320 characters, a
         duplicate, or an add that would exceed the 50-contact limit. Requires a valid
         access token.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
               $ref: "#/components/schemas/ContactInput"
             examples:
               valid:
@@ -292,6 +303,11 @@ paths:
                     message: "Email must be at most 320 characters."
         "409":
           description: The contact already exists, or the caller has reached the 50-contact limit.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
                 duplicate:
                   value:
                     error: "DUPLICATE_CONTACT"
