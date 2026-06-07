@@ -17,6 +17,7 @@ function NotePage() {
           {user ? <span className="meta">{user.email}</span> : null}
           <Link className="button button--ghost" to="/settings">
             Settings
+          </Link>
           <Link className="button button--ghost" to="/notifications">
             Notifications
           </Link>
