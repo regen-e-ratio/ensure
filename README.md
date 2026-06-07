@@ -15,7 +15,7 @@ A TypeScript monorepo using npm workspaces. One external service: **Google OAuth
 
 | Workspace        | Responsibility |
 |------------------|----------------|
-| **`shared/`**    | Types shared across the stack. `src/api.ts` is **generated** from `contracts/openapi.yaml` by `openapi-typescript` (`npm run gen:api`); `src/constants.ts` holds shared values (e.g. `NOTE_MAX_LENGTH`). |
+| **`shared/`**    | Types shared across the stack. `src/api.ts` is **generated** from `contracts/openapi.yaml` by `openapi-typescript` (`npm run gen:api`); `src/constants.ts` holds shared values (e.g. `NOTE_MAX_LENGTH`, `CONTACT_MAX_LENGTH`, `CONTACT_LIMIT`). |
 | **`server/`**    | Express 5 API (ESM, run via `tsx`). Zod request validation, `better-sqlite3` storage, Google SSO. |
 | **`client/`**    | React 18 SPA built with Vite 5 and `react-router-dom`. |
 | **`e2e/`**       | Playwright acceptance tests. |
@@ -33,6 +33,12 @@ The SPA (`:5173`) calls the API under `/api/*` (Vite proxies to the server on `:
   and at most `NOTE_MAX_LENGTH` characters, else `400`. Requests without a valid session get `401`. If
   a stored note cannot be decrypted, `GET` **fails closed** with `500 NOTE_DECRYPT_FAILED` — never
   plaintext.
+- **`/api/contact`** (protected by `requireAuth`) — the user's contact list, scoped to the caller, so
+  no endpoint can address another user's contacts. `GET` lists them; `POST` adds one (only
+  `type: "email"` this release; the stored value preserves original case while duplicates are detected
+  case-insensitively); `DELETE /:id` removes one (idempotent). Adds are rejected for a malformed/too-long
+  email (`400`), a duplicate (`409 DUPLICATE_CONTACT`), or exceeding `CONTACT_LIMIT` (`409
+  CONTACT_LIMIT_REACHED`). The SPA surfaces this at the protected **`/settings`** page.
 - **`/api/notifications`** (protected by `requireAuth`) — the generic notification system.
   `GET /channels` lists each channel with its availability and input fields; `POST /test` sends one
   notification through the same generic capability any caller uses and returns an explicit outcome.
@@ -55,13 +61,17 @@ visitors to `/login`.
 
 ### Data store
 
-`better-sqlite3` (WAL, foreign keys on) at `./data/note.db` (`NOTE_DB_PATH`). Three tables:
+`better-sqlite3` (WAL, foreign keys on) at `./data/note.db` (`NOTE_DB_PATH`). Four tables:
 
 - **`note`** — one row per owner, keyed by `user_id` (PRIMARY KEY → at most one note per user).
   Content is stored as `ciphertext` (BLOB) with the `key_version` that protects it (indexed) plus
   `created_at`/`updated_at` — there is no plaintext column.
 - **`user`** — provisioned from the Google profile (`id`, `email`, `name`, timestamps).
 - **`session`** — backs the refresh token (`token_hash` unique, `expires_at`, `last_used_at`).
+- **`contact`** — a user's contacts (`id` PK, `user_id` FK, indexed). Carries an explicit `type`
+  (`email` today; the column exists so future types need no migration), the `value` (original case)
+  and a derived `value_norm` with `UNIQUE(user_id, type, value_norm)` for case-insensitive
+  de-duplication, plus `created_at`. Stored as plaintext (no encryption requirement).
 
 ### Encryption at rest
 
@@ -95,7 +105,7 @@ operator send a test notification and see the outcome.
 
 Mounted only when their env gate is set: `POST /api/test/login` (`AUTH_TEST_MODE=1`) mints a real
 session for a fake user without contacting Google, and `POST /api/test/reset`
-(`NOTE_ALLOW_TEST_RESET=1`) clears the note. These let Playwright exercise the real middleware and
+(`NOTE_ALLOW_TEST_RESET=1`) clears the note and contacts. These let Playwright exercise the real middleware and
 cookies while skipping Google's non-automatable consent screen.
 
 ## Run

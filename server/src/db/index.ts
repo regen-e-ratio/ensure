@@ -45,6 +45,18 @@ export function openDb(path: string): Db {
 
     CREATE INDEX IF NOT EXISTS idx_session_token_hash ON session(token_hash);
     CREATE INDEX IF NOT EXISTS idx_session_user_id ON session(user_id);
+
+    CREATE TABLE IF NOT EXISTS contact (
+      id          TEXT NOT NULL PRIMARY KEY,
+      user_id     TEXT NOT NULL REFERENCES user(id),
+      type        TEXT NOT NULL,
+      value       TEXT NOT NULL,
+      value_norm  TEXT NOT NULL,
+      created_at  TEXT NOT NULL,
+      UNIQUE (user_id, type, value_norm)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_contact_user_id ON contact(user_id);
   `);
   return db;
 }

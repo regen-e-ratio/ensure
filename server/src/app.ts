@@ -6,7 +6,9 @@ import type { Keyring } from "./crypto/keyring";
 import type { EmailProvider } from "./notifications/channels/email/provider";
 import { StubEmailProvider } from "./notifications/channels/email/stub-provider";
 import { clearNote } from "./db/note-repo";
+import { clearContacts } from "./db/contact-repo";
 import { createNoteRouter } from "./routes/note";
+import { createContactRouter } from "./routes/contact";
 import { createNotificationsRouter } from "./routes/notifications";
 import { createAuthRouter } from "./auth/routes";
 import { createRequireAuth } from "./auth/require-auth";
@@ -44,6 +46,7 @@ export function createApp(db: Db, options: AppOptions): Express {
 
   const requireAuth = createRequireAuth(auth.jwtSecret);
   app.use("/api/note", requireAuth, createNoteRouter(db, options.encryption));
+  app.use("/api/contact", requireAuth, createContactRouter(db));
   app.use(
     "/api/notifications",
     requireAuth,
@@ -53,6 +56,7 @@ export function createApp(db: Db, options: AppOptions): Express {
   if (options.enableTestReset) {
     app.post("/api/test/reset", (_req, res) => {
       clearNote(db);
+      clearContacts(db);
       res.status(204).end();
     });
   }
