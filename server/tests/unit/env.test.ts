@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { loadEnv } from "../../src/config/env";
+import { loadEnv, loadEncryption } from "../../src/config/env";
+
+const KEY = Buffer.alloc(32, 1).toString("base64");
+const ENC_COMPLETE: NodeJS.ProcessEnv = {
+  NOTE_ENC_KEYS: `1:${KEY}`,
+  NOTE_ENC_ACTIVE_VERSION: "1",
+};
 
 const COMPLETE: NodeJS.ProcessEnv = {
   GOOGLE_CLIENT_ID: "client-id.apps.googleusercontent.com",
@@ -37,5 +43,44 @@ describe("loadEnv", () => {
 
   it("rejects a malformed redirect URI", () => {
     expect(() => loadEnv({ ...COMPLETE, GOOGLE_REDIRECT_URI: "not-a-url" })).toThrow();
+  });
+});
+
+describe("loadEncryption", () => {
+  it("builds a keyring from a valid env", () => {
+    const ring = loadEncryption(ENC_COMPLETE);
+    expect(ring.getActiveVersion()).toBe(1);
+    expect(ring.listVersions()).toEqual([1]);
+  });
+
+  it.each(["NOTE_ENC_KEYS", "NOTE_ENC_ACTIVE_VERSION"])(
+    "refuses to boot when %s is missing (fail closed)",
+    (key) => {
+      const broken = { ...ENC_COMPLETE };
+      delete broken[key];
+      expect(() => loadEncryption(broken)).toThrow(/Invalid server configuration/);
+    },
+  );
+
+  it("refuses to boot when the active version is absent from the keyring", () => {
+    expect(() => loadEncryption({ ...ENC_COMPLETE, NOTE_ENC_ACTIVE_VERSION: "2" })).toThrow(
+      /Invalid server configuration/,
+    );
+  });
+
+  it("refuses to boot when a key is not 32 bytes", () => {
+    const short = Buffer.alloc(16, 1).toString("base64");
+    expect(() =>
+      loadEncryption({ NOTE_ENC_KEYS: `1:${short}`, NOTE_ENC_ACTIVE_VERSION: "1" }),
+    ).toThrow(/Invalid server configuration/);
+  });
+
+  it("does not leak key material in the error (FR-016)", () => {
+    expect(() => loadEncryption({ ...ENC_COMPLETE, NOTE_ENC_ACTIVE_VERSION: "2" })).toThrow();
+    try {
+      loadEncryption({ ...ENC_COMPLETE, NOTE_ENC_ACTIVE_VERSION: "2" });
+    } catch (err) {
+      expect((err as Error).message).not.toContain(KEY);
+    }
   });
 });

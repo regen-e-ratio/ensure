@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createApp } from "./app";
-import { loadEnv } from "./config/env";
+import { loadEnv, loadEncryption } from "./config/env";
 import { openDb } from "./db/index";
 import { sweepExpired } from "./db/session-repo";
 
@@ -21,8 +21,10 @@ if (DB_PATH !== ":memory:") {
 }
 
 // Validate configuration up front — the process refuses to boot if a required
-// Google/JWT variable is missing or malformed (secrets are never logged).
+// Google/JWT variable is missing or malformed, or if the encryption keyring is
+// missing/invalid (fail closed, FR-015). Secrets are never logged.
 const auth = loadEnv();
+const encryption = loadEncryption();
 
 const db = openDb(DB_PATH);
 // Tidy any sessions that lapsed while the server was down (no cron needed).
@@ -30,6 +32,7 @@ sweepExpired(db);
 
 const app = createApp(db, {
   auth,
+  encryption,
   enableTestReset: process.env.NOTE_ALLOW_TEST_RESET === "1",
 });
 
