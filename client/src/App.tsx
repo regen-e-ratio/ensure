@@ -2,6 +2,7 @@ import { Routes, Route, Link } from "react-router-dom";
 import { NoteEditor } from "./components/NoteEditor";
 import { LoginPage } from "./pages/LoginPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { NotificationsTestPage } from "./pages/NotificationsTestPage";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { useAuth } from "./auth/useAuth";
 
@@ -16,6 +17,8 @@ function NotePage() {
           {user ? <span className="meta">{user.email}</span> : null}
           <Link className="button button--ghost" to="/settings">
             Settings
+          <Link className="button button--ghost" to="/notifications">
+            Notifications
           </Link>
           <button type="button" className="button button--ghost" onClick={() => void signOut()}>
             Sign out
@@ -44,6 +47,14 @@ export function App() {
         element={
           <ProtectedRoute>
             <SettingsPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/notifications"
+        element={
+          <ProtectedRoute>
+            <NotificationsTestPage />
           </ProtectedRoute>
         }
       />

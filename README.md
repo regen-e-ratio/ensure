@@ -39,6 +39,11 @@ The SPA (`:5173`) calls the API under `/api/*` (Vite proxies to the server on `:
   case-insensitively); `DELETE /:id` removes one (idempotent). Adds are rejected for a malformed/too-long
   email (`400`), a duplicate (`409 DUPLICATE_CONTACT`), or exceeding `CONTACT_LIMIT` (`409
   CONTACT_LIMIT_REACHED`). The SPA surfaces this at the protected **`/settings`** page.
+- **`/api/notifications`** (protected by `requireAuth`) — the generic notification system.
+  `GET /channels` lists each channel with its availability and input fields; `POST /test` sends one
+  notification through the same generic capability any caller uses and returns an explicit outcome.
+  Invalid input → `400 VALIDATION_ERROR` (no delivery); a known-but-disabled channel →
+  `400 CHANNEL_NOT_SUPPORTED`; a delivery attempt → `200` with `{ outcome: { status: "sent" | "failed", … } }`.
 
 **Sign-in** uses the server-side **OAuth 2.0 Authorization Code + PKCE** flow with Google
 (`google-auth-library`); the client secret never leaves the server. On success the server mints its
@@ -78,6 +83,24 @@ notes use the active version; any present version can decrypt; an unknown versio
 (new saves migrate lazily), then run the operator CLI `npm run reencrypt --workspace server` to
 re-encrypt every remaining note so the old version can be retired once no note depends on it.
 
+### Notifications
+
+A generic, reusable notification system in `server/src/notifications/`. A single `notify()`
+dispatcher routes a `{ channel, recipient, content }` request through a **channel registry** to the
+matching `NotificationChannel` handler, returning an explicit outcome (sent, or failed with a reason);
+unknown/disabled channels are rejected with `CHANNEL_NOT_SUPPORTED`. Only **Email** is enabled;
+WhatsApp and push are registered as unavailable so the UI can show the extension point. The Email
+channel validates its fields, **sanitizes HTML bodies** server-side (`sanitize-html`) before sending,
+and bounds the provider call with a 30s timeout.
+
+The external email vendor sits behind a one-method **`EmailProvider` port** so it is swappable with no
+caller changes. **No vendor is wired yet**: the default `StubEmailProvider` performs no network send
+(it lets the pipeline run end-to-end), selected by `EMAIL_PROVIDER` (default `stub`). Adding a real
+provider is a single adapter implementing `EmailProvider`, registered in `channels/email/providers.ts`
+and selected via `EMAIL_PROVIDER` — see `specs/005-notifications-system/email-providers.md`. The
+client `/notifications` page (gated behind sign-in) drives its form from `GET /channels` and lets an
+operator send a test notification and see the outcome.
+
 ### Test seams (never in production)
 
 Mounted only when their env gate is set: `POST /api/test/login` (`AUTH_TEST_MODE=1`) mints a real
@@ -99,7 +122,8 @@ npm run dev:client     # Vite SPA on  http://localhost:5173    (proxies /api -> 
 
 Open <http://localhost:5173> → you are redirected to `/login` → **Sign in with Google** → the note
 loads and is editable. It persists across reloads and server restarts; **Sign out** returns you to
-`/login`.
+`/login`. The **Notifications** link (or <http://localhost:5173/notifications>) opens the notification
+test page.
 
 ## Manual setup
 
@@ -152,6 +176,12 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 
 To rotate, add a new version, point `NOTE_ENC_ACTIVE_VERSION` at it, run
 `npm run reencrypt --workspace server`, then retire the old version once no note still uses it.
+
+**Optional** — `EMAIL_PROVIDER` selects the email provider for the notification system. It defaults to
+`stub` (in-process, **no real email is sent**), which needs no setup. No email vendor is integrated
+yet; to add one, implement an `EmailProvider` adapter and set `EMAIL_PROVIDER` to its name (see
+[`specs/005-notifications-system/email-providers.md`](specs/005-notifications-system/email-providers.md)),
+supplying its credentials here server-side.
 
 **Test-only** (optional; never enable in production): `AUTH_TEST_MODE=1` mounts the test-login seam
 and `NOTE_ALLOW_TEST_RESET=1` mounts the reset route. The e2e suite sets these (and dummy Google/JWT
