@@ -221,6 +221,96 @@ paths:
                 $ref: "#/components/schemas/Error"
               example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
 
+  /notifications/channels:
+    get:
+      operationId: getNotificationChannels
+      summary: List notification channels and their fields
+      description: >
+        Returns every known notification channel with its availability and the input fields
+        it requires, so the test page can render its selector and per-channel form from a
+        single server-side source of truth. In v1 only Email is available; WhatsApp and push
+        are listed as unavailable (cannot be selected to send). Requires a valid access token.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: The channels and their field descriptors.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChannelsResponse"
+        "401":
+          description: No valid access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
+
+  /notifications/test:
+    post:
+      operationId: sendTestNotification
+      summary: Send a notification through the generic capability
+      description: >
+        Invokes the same generic notification capability any caller uses, with a channel,
+        recipient, and content. Returns an explicit outcome (sent, or failed with a
+        human-readable reason). Invalid input is rejected with 400 before any delivery is
+        attempted; a known-but-disabled channel returns 400 CHANNEL_NOT_SUPPORTED; a
+        provider rejection/timeout is reported as a 200 outcome with status "failed".
+        Requires a valid access token.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationTestRequest"
+            examples:
+              email:
+                value:
+                  channel: "email"
+                  recipient: "person@example.com"
+                  subject: "Test notification"
+                  body: "Hello from the notification system."
+                  bodyFormat: "text"
+      responses:
+        "200":
+          description: Delivery was attempted; the outcome (sent or failed) is reported.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendOutcomeResponse"
+              examples:
+                sent:
+                  value:
+                    outcome: { status: "sent", channel: "email", providerMessageId: "stub-accepted" }
+                failed:
+                  value:
+                    outcome:
+                      { status: "failed", channel: "email",
+                        reason: "The email provider did not respond in time." }
+        "400":
+          description: >
+            Validation failed (invalid email, empty/oversized subject or body, bad format) —
+            no delivery attempted — or the requested channel is known but not enabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                validation:
+                  value: { error: "VALIDATION_ERROR", message: "Recipient must be a valid email address." }
+                unsupported:
+                  value: { error: "CHANNEL_NOT_SUPPORTED", message: "The 'whatsapp' channel is not available yet." }
+        "401":
+          description: No valid access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
+
   /test/login:
     post:
       operationId: testLogin
@@ -320,7 +410,105 @@ components:
         error:
           type: string
           description: Stable machine-readable error code.
-          examples: ["UNAUTHORIZED", "VALIDATION_ERROR"]
+          examples: ["UNAUTHORIZED", "VALIDATION_ERROR", "CHANNEL_NOT_SUPPORTED"]
         message:
           type: string
           description: Human-readable explanation suitable for display.
+    NotificationChannelType:
+      type: string
+      enum: [email, whatsapp, push]
+      description: >
+        A notification delivery channel. Only "email" is enabled in v1; "whatsapp" and
+        "push" are reserved so the system and UI can present the extension point.
+    ChannelField:
+      type: object
+      additionalProperties: false
+      required: [name, label, type, required]
+      description: One input a channel needs, so the test page can render its form dynamically.
+      properties:
+        name:
+          type: string
+          description: Field key (e.g. "recipient", "subject", "body", "bodyFormat").
+        label:
+          type: string
+          description: Human label for the control.
+        type:
+          type: string
+          enum: [email, text, textarea, select]
+          description: The kind of control to render.
+        required:
+          type: boolean
+        options:
+          type: array
+          items: { type: string }
+          description: Allowed values for a "select" field (e.g. ["text", "html"]).
+    ChannelInfo:
+      type: object
+      additionalProperties: false
+      required: [type, label, available, fields]
+      properties:
+        type: { $ref: "#/components/schemas/NotificationChannelType" }
+        label:
+          type: string
+          description: Display name for the channel (e.g. "Email").
+        available:
+          type: boolean
+          description: True only for channels that can currently send (Email in v1).
+        fields:
+          type: array
+          items: { $ref: "#/components/schemas/ChannelField" }
+          description: The inputs to render when this channel is selected.
+    ChannelsResponse:
+      type: object
+      additionalProperties: false
+      required: [channels]
+      properties:
+        channels:
+          type: array
+          items: { $ref: "#/components/schemas/ChannelInfo" }
+    NotificationTestRequest:
+      type: object
+      additionalProperties: false
+      required: [channel]
+      description: >
+        A request to send one notification to one recipient through one channel. The
+        recipient/subject/body/bodyFormat fields are interpreted per channel (for Email,
+        all four apply).
+      properties:
+        channel: { $ref: "#/components/schemas/NotificationChannelType" }
+        recipient:
+          type: string
+          description: For Email, the destination email address.
+        subject:
+          type: string
+          description: For Email, the message subject (1..200 chars after trimming).
+        body:
+          type: string
+          description: For Email, the message body (1..10000 chars after trimming).
+        bodyFormat:
+          type: string
+          enum: [text, html]
+          description: For Email, whether the body is plain text or HTML (HTML is sanitized server-side).
+    SendOutcome:
+      type: object
+      additionalProperties: false
+      required: [status, channel]
+      description: The explicit result of a delivery attempt (no request fails silently).
+      properties:
+        status:
+          type: string
+          enum: [sent, failed]
+          description: '"sent" = accepted by the provider; "failed" = delivery was attempted but did not succeed.'
+        channel: { $ref: "#/components/schemas/NotificationChannelType" }
+        reason:
+          type: string
+          description: Present when status is "failed" — a human-readable failure reason.
+        providerMessageId:
+          type: string
+          description: Present when status is "sent", if the provider returns an id.
+    SendOutcomeResponse:
+      type: object
+      additionalProperties: false
+      required: [outcome]
+      properties:
+        outcome: { $ref: "#/components/schemas/SendOutcome" }

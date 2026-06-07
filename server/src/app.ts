@@ -3,8 +3,11 @@ import cookieParser from "cookie-parser";
 import type { Db } from "./db/index";
 import type { AuthConfig } from "./config/env";
 import type { Keyring } from "./crypto/keyring";
+import type { EmailProvider } from "./notifications/channels/email/provider";
+import { StubEmailProvider } from "./notifications/channels/email/stub-provider";
 import { clearNote } from "./db/note-repo";
 import { createNoteRouter } from "./routes/note";
+import { createNotificationsRouter } from "./routes/notifications";
 import { createAuthRouter } from "./auth/routes";
 import { createRequireAuth } from "./auth/require-auth";
 import { createTestLoginHandler } from "./test-support/test-login";
@@ -14,6 +17,8 @@ export interface AppOptions {
   auth: AuthConfig;
   /** Versioned encryption keyring used to seal/open note content at rest. Required. */
   encryption: Keyring;
+  /** Email provider for the notification system. Defaults to the in-process stub (no network send). */
+  emailProvider?: EmailProvider;
   /** Enables a non-contract POST /api/test/reset route for clearing state in e2e runs. Never on in production. */
   enableTestReset?: boolean;
 }
@@ -39,6 +44,11 @@ export function createApp(db: Db, options: AppOptions): Express {
 
   const requireAuth = createRequireAuth(auth.jwtSecret);
   app.use("/api/note", requireAuth, createNoteRouter(db, options.encryption));
+  app.use(
+    "/api/notifications",
+    requireAuth,
+    createNotificationsRouter(options.emailProvider ?? new StubEmailProvider()),
+  );
 
   if (options.enableTestReset) {
     app.post("/api/test/reset", (_req, res) => {
