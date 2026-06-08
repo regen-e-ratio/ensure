@@ -29,7 +29,11 @@ const encryption = loadEncryption();
 // Select the email provider (EMAIL_PROVIDER, default "stub" — no network send in v1).
 // Read here, like PORT/NOTE_DB_PATH, rather than in the auth env schema. An unknown
 // value throws, so a misconfiguration cannot silently fall back to not sending.
-const emailProvider = createEmailProvider(process.env.EMAIL_PROVIDER ?? "stub");
+// EMAIL_STUB_DEBUG=1 turns on the stub's opt-in, local-debug-only content log (spec 007);
+// off by default, and it only affects the stub.
+const emailProvider = createEmailProvider(process.env.EMAIL_PROVIDER ?? "stub", {
+  debug: process.env.EMAIL_STUB_DEBUG === "1",
+});
 
 const db = openDb(DB_PATH);
 // Tidy any sessions that lapsed while the server was down (no cron needed).
