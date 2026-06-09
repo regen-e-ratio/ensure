@@ -183,6 +183,12 @@ yet; to add one, implement an `EmailProvider` adapter and set `EMAIL_PROVIDER` t
 [`specs/005-notifications-system/email-providers.md`](specs/005-notifications-system/email-providers.md)),
 supplying its credentials here server-side.
 
+**Optional, local-debug-only** — `EMAIL_STUB_DEBUG=1` turns on a debug log in the email **stub**: for
+each send it writes one line to the server console with the recipient, subject, body, and body format
+the backend received, to verify the test-page fields reach the backend. It is **off by default** and
+applies only to the stub. ⚠️ Enabling it writes recipient and message content to the console, so use
+it only on your local machine — never set it in a shared or production environment.
+
 **Test-only** (optional; never enable in production): `AUTH_TEST_MODE=1` mounts the test-login seam
 and `NOTE_ALLOW_TEST_RESET=1` mounts the reset route. The e2e suite sets these (and dummy Google/JWT
 values **and a test keyring**) itself — see [`playwright.config.ts`](playwright.config.ts) — so you
