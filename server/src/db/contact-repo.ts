@@ -64,6 +64,22 @@ export function listContacts(db: Db, userId: string): Contact[] {
   return rows.map(toContact);
 }
 
+/**
+ * Read the caller's own VERIFIED contacts (scoped by `userId`, `verified_at IS NOT NULL`),
+ * ordered by creation time. Used by feature 010 to snapshot exactly the contacts eligible to
+ * receive a release — unverified contacts never get a grant (FR-001, SC-003).
+ */
+export function listVerifiedContacts(db: Db, userId: string): Contact[] {
+  const rows = db
+    .prepare(
+      `SELECT ${CONTACT_COLUMNS} FROM contact
+       WHERE user_id = ? AND verified_at IS NOT NULL
+       ORDER BY created_at ASC, id ASC`,
+    )
+    .all(userId) as ContactRow[];
+  return rows.map(toContact);
+}
+
 /** Count the caller's contacts — used to enforce the per-user limit (FR-015). */
 export function countContacts(db: Db, userId: string): number {
   const row = db

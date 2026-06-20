@@ -65,6 +65,18 @@ export function getNote(db: Db, userId: string, keyring: Keyring): Note | null {
 }
 
 /**
+ * Read and decrypt a specific owner's note by their user id, for the PUBLIC release-view route
+ * (feature 010): a verified contact opens a one-time link with no session, so the note owner is
+ * carried by the release grant rather than by `req.user`. This is the only path that decrypts a
+ * note not scoped to the caller, and it is reachable only after a valid grant lookup. Returns
+ * null when the owner has no note; throws {@link NoteDecryptError} (fail-closed) if the stored
+ * row cannot be decrypted — the caller maps that to a 500 and never returns plaintext (FR-010).
+ */
+export function getNoteForOwner(db: Db, ownerUserId: string, keyring: Keyring): Note | null {
+  return getNote(db, ownerUserId, keyring);
+}
+
+/**
  * Encrypt `text` with the keyring's **active** version and create or replace the
  * caller's note in place. Preserves `created_at` across updates and advances
  * `updated_at` (last-write-wins; FR-018, FR-019). Because every save uses the active

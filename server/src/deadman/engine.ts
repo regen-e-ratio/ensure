@@ -1,4 +1,7 @@
-import { DEADMAN_MAX_GRACE_REMINDERS } from "@ensure/shared/constants";
+import {
+  DEADMAN_MAX_GRACE_REMINDERS,
+  RELEASE_GRANT_TTL_SECONDS,
+} from "@ensure/shared/constants";
 import type { Db } from "../db/index";
 import {
   getConfig,
@@ -7,6 +10,14 @@ import {
   type DeadmanConfig,
 } from "./config-repo";
 import { recordEvent } from "./event-repo";
+import {
+  createRelease,
+  createGrants,
+  setGrantEmailStatus,
+  hasReleaseForCurrentCycle,
+  type GrantSeed,
+} from "../db/release-repo";
+import { mintToken, hashToken } from "./tokens";
 
 /**
  * The pure decision `evaluate` returns for a switch at a given moment (FR-008). No I/O is
@@ -33,16 +44,37 @@ export interface ReminderMessage {
   body: string;
 }
 
+/** A snapshotted release recipient: a verified contact's id + its address. */
+export interface ReleaseRecipient {
+  contactId: string;
+  address: string;
+}
+
+/**
+ * The release-delivery capability the engine needs on trigger (feature 010), injected so the
+ * engine stays unit-testable with spies. `listVerifiedContacts` snapshots only verified contacts
+ * (`verified_at != null`); `sendReleaseEmail` emails one tokenized `/r/<token>` link via the
+ * generic `notify()` dispatcher and resolves with the provider message id (or throws on failure).
+ * The raw token is passed here only to build the link — it is never stored or logged.
+ */
+export interface ReleaseDeps {
+  listVerifiedContacts: (userId: string) => ReleaseRecipient[];
+  sendReleaseEmail: (recipient: string, token: string) => Promise<string | null>;
+}
+
 /**
  * The side-effecting capabilities the engine needs, injected so `runDeadmanTick` stays
  * unit-testable with a spy notifier and a deterministic clock (FR-009). `notify` sends one
  * reminder via the generic dispatcher (never a provider directly); `now` is the clock.
  * `userEmailFor` resolves the recipient address (the user's own account email in 008).
+ * `release` (feature 010) is the delivery capability used when a switch fires; when omitted
+ * (e.g. 008-era tests) the trigger still transitions to `triggered` but creates no release.
  */
 export interface Deps {
   notify: (message: ReminderMessage) => Promise<void>;
   now: () => Date;
   userEmailFor: (userId: string) => string | null;
+  release?: ReleaseDeps;
 }
 
 /** Whether `now` is at or after the absolute ISO deadline (inclusive boundary). */
@@ -117,7 +149,7 @@ export async function runDeadmanTick(db: Db, deps: Deps, now: Date): Promise<voi
           await sendReminder(db, deps, config, nowIso);
           break;
         case "trigger":
-          trigger(db, config, nowIso);
+          await trigger(db, deps, config, nowIso);
           break;
         case "stay":
         case "noop":
@@ -167,10 +199,92 @@ async function sendReminder(
   recordEvent(db, config.userId, "reminder_sent", { reminder: remindersSent }, nowIso);
 }
 
-/** Fire the switch: transition to triggered and record it (no contact email in 008). */
-function trigger(db: Db, config: DeadmanConfig, nowIso: string): void {
-  setState(db, config.userId, "triggered", { graceDeadlineAt: config.graceDeadlineAt }, nowIso);
-  recordEvent(db, config.userId, "triggered", null, nowIso);
+/**
+ * Fire the switch (feature 010): create a release, snapshot the user's VERIFIED contacts, mint
+ * one one-time grant token per contact (storing only its hash), email each a tokenized link via
+ * the injected notifier (recording per-grant `email_status`, a single failure never aborting the
+ * batch), transition to `triggered`, and record `triggered` + `released` (grant count only, never
+ * a token or plaintext).
+ *
+ * Idempotent (FR-005, SC-002): guarded by an existing-release check, so the in-process timer and
+ * an external cron can never double-release. When no `release` deps are injected (008-era tests),
+ * it still transitions to `triggered` and records `triggered` without creating a release.
+ */
+async function trigger(
+  db: Db,
+  deps: Deps,
+  config: DeadmanConfig,
+  nowIso: string,
+): Promise<void> {
+  const userId = config.userId;
+
+  // Idempotency guard: never create a second scheduled release for an already-released cycle.
+  if (deps.release && hasReleaseForCurrentCycle(db, userId)) {
+    // Ensure the state is at least `triggered` (defensive); create no new release/grants/events.
+    setState(db, userId, "triggered", { graceDeadlineAt: config.graceDeadlineAt }, nowIso);
+    return;
+  }
+
+  let grantCount = 0;
+  if (deps.release) {
+    grantCount = await deliverRelease(db, deps.release, userId, "schedule", nowIso);
+  }
+
+  setState(db, userId, "triggered", { graceDeadlineAt: config.graceDeadlineAt }, nowIso);
+  recordEvent(db, userId, "triggered", null, nowIso);
+  if (deps.release) {
+    // Non-sensitive metadata only: the number of grants created (FR-017, SC-008).
+    recordEvent(db, userId, "released", { grants: grantCount }, nowIso);
+  }
+}
+
+/**
+ * Shared release delivery (used by the engine trigger and the manual test-release): create a
+ * `release` of the given `trigger` kind, snapshot the owner's verified contacts, mint + hash one
+ * grant token per contact, persist the grants (hash + 30-day expiry), and email each a tokenized
+ * link via the injected notifier, recording per-grant `email_status`. A single send failure is
+ * caught into `email_status='failed'` and never aborts the batch (others continue). Returns the
+ * number of grants created. Never persists or logs a raw token or note plaintext.
+ */
+export async function deliverRelease(
+  db: Db,
+  release: ReleaseDeps,
+  userId: string,
+  trigger: "schedule" | "manual_test",
+  nowIso: string,
+): Promise<number> {
+  const recipients = release.listVerifiedContacts(userId);
+  if (recipients.length === 0) {
+    // Still record an (empty) release so the cycle is marked released (idempotency) for a
+    // scheduled fire; the caller decides whether to surface this.
+    createRelease(db, userId, trigger, nowIso);
+    return 0;
+  }
+
+  const releaseRow = createRelease(db, userId, trigger, nowIso);
+  const expiresAt = addSeconds(nowIso, RELEASE_GRANT_TTL_SECONDS);
+
+  // Mint one token per recipient up front; persist ONLY the hashes.
+  const tokens = recipients.map(() => mintToken());
+  const seeds: GrantSeed[] = recipients.map((r, i) => ({
+    contactId: r.contactId,
+    tokenHash: hashToken(tokens[i]!),
+  }));
+  const grantIds = createGrants(db, releaseRow.id, userId, seeds, expiresAt, nowIso);
+
+  // Email each recipient its tokenized link; a per-grant failure is recorded and does not abort.
+  for (let i = 0; i < recipients.length; i++) {
+    const grantId = grantIds[i]!;
+    try {
+      const providerMessageId = await release.sendReleaseEmail(recipients[i]!.address, tokens[i]!);
+      setGrantEmailStatus(db, grantId, "sent", providerMessageId);
+    } catch {
+      // FR-002/FR-022: record a non-sensitive failure marker (no token/address) and continue.
+      setGrantEmailStatus(db, grantId, "failed", null, "send failed");
+    }
+  }
+
+  return grantIds.length;
 }
 
 /** Re-export for callers that need the working config shape alongside the engine. */

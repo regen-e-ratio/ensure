@@ -58,7 +58,7 @@ const app = createApp(db, {
 // in-process liveness timer. The driver runs a one-shot boot-recovery tick first, so a switch
 // whose deadline lapsed while the server was down is evaluated on startup (FR-014). No-op when
 // DEADMAN_TICK_DISABLED=1.
-const deadmanDeps = buildDeadmanDeps(db, emailProvider);
+const deadmanDeps = buildDeadmanDeps(db, emailProvider, deadman.appBaseUrl);
 startDeadmanTimer(db, deadmanDeps, { tickMs: deadman.tickMs, disabled: deadman.tickDisabled });
 
 app.listen(PORT, () => {

@@ -112,5 +112,36 @@ export function openDb(path: string): Db {
     CREATE INDEX IF NOT EXISTS idx_deadman_event_user
       ON deadman_event(user_id, created_at);
   `);
+
+  // Feature 010 — release & secure one-time delivery (roadmap §3). A `release` groups the grants
+  // created for one fired (or test) cycle; each `release_grant` carries a one-time token (stored
+  // ONLY as its SHA-256 hash), a future `expires_at`, a view-once `viewed_at`, and per-grant email
+  // delivery status. The note owner's `user_id` is denormalized onto the grant so the PUBLIC open
+  // route can decrypt the owner's note without a session. The index backs the public lookup by hash.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS release (
+      id         TEXT NOT NULL PRIMARY KEY,
+      user_id    TEXT NOT NULL REFERENCES user(id),
+      trigger    TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS release_grant (
+      id                  TEXT NOT NULL PRIMARY KEY,
+      release_id          TEXT NOT NULL REFERENCES release(id),
+      user_id             TEXT NOT NULL REFERENCES user(id),
+      contact_id          TEXT NOT NULL REFERENCES contact(id),
+      token_hash          TEXT NOT NULL UNIQUE,
+      expires_at          TEXT NOT NULL,
+      viewed_at           TEXT,
+      email_status        TEXT NOT NULL DEFAULT 'pending',
+      provider_message_id TEXT,
+      email_error         TEXT,
+      created_at          TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_release_grant_token
+      ON release_grant(token_hash);
+  `);
   return db;
 }

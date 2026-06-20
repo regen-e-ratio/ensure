@@ -623,6 +623,90 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
               example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
+  /deadman/test-release:
+    post:
+      operationId: testReleaseDeadman
+      summary: Preview the recipient experience by sending a test release to your own contacts
+      description: >
+        Mints a one-time grant to each of the caller's OWN verified contact address(es), creates
+        a release tagged `manual_test`, and emails each a tokenized `${APP_BASE_URL}/r/{token}`
+        link via the generic notify() dispatcher — WITHOUT changing the switch state — so a user
+        can preview exactly what their contacts will receive when the switch fires (feature 010,
+        the CTA feature 012 integrates). Scoped to the caller (`req.user.id`); sends only to the
+        caller's own verified addresses. Returns the number of grants created. Rejected with 409
+        when the caller has no verified contact (no email is sent). Requires a valid access token.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: A test release was created and emailed to the caller's own verified contact(s).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestReleaseResult"
+              example: { grants: 1 }
+        "401":
+          description: No valid access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
+        "409":
+          description: The caller has no verified contact, so there is nobody to send a test release to.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "NO_VERIFIED_CONTACT", message: "Verify a contact before sending a test release." }
+  /release/{token}:
+    get:
+      operationId: openRelease
+      summary: Open a one-time release link to read the note (public, token-only, view-once)
+      description: >
+        PUBLIC (no session) endpoint a verified contact opens from the tokenized link emailed
+        when a switch fires (feature 010). Authority is possession of the unguessable token only:
+        the server hashes the supplied token, looks the grant up by hash, and — only when the
+        grant is valid, unviewed, and unexpired — decrypts the note owner's note server-side via
+        the keyring, marks the grant viewed (view-once), and returns the note exactly once. A
+        second open, or an expired grant, yields 410 Gone. A missing/malformed/unknown token
+        yields a generic not-available result disclosing nothing. A decrypt failure fails closed
+        with 500 and leaves the grant unviewed (retryable) — the note plaintext is never leaked.
+        The route is rate-limited. The raw token is never logged or echoed.
+      parameters:
+        - in: path
+          name: token
+          required: true
+          schema: { type: string }
+          description: The one-time release-grant token carried by the emailed link.
+      responses:
+        "200":
+          description: The grant was valid and unviewed; the decrypted note is returned exactly once.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReleaseView"
+        "404":
+          description: No grant matches the token (unknown or malformed) — discloses nothing.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "NOT_AVAILABLE", message: "This link is not available." }
+        "410":
+          description: The grant has already been viewed or has expired (view-once / time-limited).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "GONE", message: "This link is no longer available." }
+        "500":
+          description: The note could not be decrypted; fail-closed, the grant stays unviewed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "DECRYPT_FAILED", message: "This message could not be opened. Please try again." }
 
   /test/login:
     post:
@@ -797,6 +881,31 @@ components:
             confirmed; `already_verified` — a valid link for an already-confirmed contact
             (idempotent); `invalid_or_expired` — the token was missing, malformed, unknown,
             expired, or already used (fail-closed; discloses no contact/owner existence).
+    ReleaseView:
+      type: object
+      additionalProperties: false
+      required: [note]
+      description: >
+        The one-time decrypted note returned by the public release-view endpoint (feature 010)
+        on a valid, unviewed, unexpired grant. Materialized in memory only at the moment of a
+        valid open and never persisted outside the existing encrypted note; the grant's token is
+        then burned (view-once).
+      properties:
+        note:
+          type: string
+          description: The note owner's decrypted note content, returned exactly once.
+    TestReleaseResult:
+      type: object
+      additionalProperties: false
+      required: [grants]
+      description: >
+        The outcome of a manual test-release (feature 010): how many one-time grants were minted
+        and emailed to the caller's own verified address(es). The switch state is left unchanged.
+      properties:
+        grants:
+          type: integer
+          minimum: 0
+          description: The number of grants created and emailed to the caller's own verified contacts.
     Error:
       type: object
       additionalProperties: false
@@ -927,8 +1036,20 @@ components:
         type:
           type: string
           enum:
-            [armed, disarmed, checkin, entered_grace, reminder_sent, triggered, config_changed]
-          description: The kind of transition or action recorded.
+            [
+              armed,
+              disarmed,
+              checkin,
+              entered_grace,
+              reminder_sent,
+              triggered,
+              released,
+              config_changed,
+            ]
+          description: >
+            The kind of transition or action recorded. `released` accompanies `triggered`
+            when the fired switch creates a release and emails verified contacts (feature 010);
+            its detail carries only a non-sensitive grant count, never a token or plaintext.
         detail:
           type: ["string", "null"]
           description: Optional JSON detail (never note plaintext or any token value).

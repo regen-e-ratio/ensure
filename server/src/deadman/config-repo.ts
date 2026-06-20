@@ -211,8 +211,14 @@ export function listDue(db: Db, now: string): DeadmanConfig[] {
   return rows.map(toConfig);
 }
 
-/** Delete all switch config rows (test-only helper for resetting state between e2e runs). */
+/**
+ * Delete all dead-man state — config rows, the audit log, and feature 010's releases + grants
+ * (test-only helper for resetting state between e2e runs). Grants are deleted before their
+ * parent releases to respect the foreign key.
+ */
 export function clearDeadman(db: Db): void {
+  db.prepare("DELETE FROM release_grant").run();
+  db.prepare("DELETE FROM release").run();
   db.prepare("DELETE FROM deadman_event").run();
   db.prepare("DELETE FROM deadman_config").run();
 }

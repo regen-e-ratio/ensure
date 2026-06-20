@@ -1,5 +1,7 @@
 import { Router } from "express";
 import type { Db } from "../db/index";
+import type { Keyring } from "../crypto/keyring";
+import type { EmailProvider } from "../notifications/channels/email/provider";
 import {
   getConfig,
   upsertConfig,
@@ -9,6 +11,7 @@ import {
 } from "../deadman/config-repo";
 import { recordEvent, listEvents } from "../deadman/event-repo";
 import { parseDeadmanConfigInput } from "../validation/deadman";
+import { runTestRelease } from "../deadman/test-release";
 import {
   DEADMAN_DEFAULT_INTERVAL_SECONDS,
   DEADMAN_DEFAULT_GRACE_SECONDS,
@@ -17,13 +20,22 @@ import {
 /** How many recent events the status response carries. */
 const EVENT_LIMIT = 20;
 
+/** The collaborators the authed test-release handler needs (feature 010). */
+export interface DeadmanReleaseDeps {
+  keyring: Keyring;
+  appBaseUrl: string;
+  emailProvider: EmailProvider;
+}
+
 /**
  * Dependencies the router needs beyond the db: a clock, injected so contract tests can pin
- * `now` for deterministic countdowns. (The reminder notifier is a property of the engine
- * tick, not the synchronous routes.)
+ * `now` for deterministic countdowns, and (feature 010) the release collaborators used by the
+ * authed test-release preview. (The reminder notifier is a property of the engine tick, not the
+ * synchronous routes.)
  */
 export interface DeadmanRouterDeps {
   now: () => Date;
+  release: DeadmanReleaseDeps;
 }
 
 /**
@@ -125,6 +137,23 @@ export function createDeadmanRouter(db: Db, deps: DeadmanRouterDeps): Router {
     const updated = recordCheckin(db, userId, nowIso) as DeadmanConfig;
     recordEvent(db, userId, "checkin", { nextCheckinDueAt: updated.nextCheckinDueAt }, nowIso);
     res.status(200).json(toStatus(updated, nowIso, listEvents(db, userId, EVENT_LIMIT)));
+  });
+
+  // Feature 010 (US3): preview the recipient experience. Mints a one-time grant to the caller's
+  // OWN verified address(es), creates a `manual_test` release, and emails each a tokenized link
+  // WITHOUT changing the switch state. 409 when the caller has no verified contact (no email).
+  router.post("/test-release", async (req, res) => {
+    const userId = req.user!.id;
+    const nowIso = deps.now().toISOString();
+    const grants = await runTestRelease(db, deps.release, userId, nowIso);
+    if (grants === 0) {
+      res.status(409).json({
+        error: "NO_VERIFIED_CONTACT",
+        message: "Verify a contact before sending a test release.",
+      });
+      return;
+    }
+    res.status(200).json({ grants });
   });
 
   return router;

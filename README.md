@@ -73,6 +73,20 @@ The SPA (`:5173`) calls the API under `/api/*` (Vite proxies to the server on `:
   `active`/`grace` switch (→ `active`, deadline reset); it is rejected `409` when disarmed/triggered. The
   SPA surfaces this at the protected **`/deadman`** dashboard (state badge, live countdown, big check-in
   button, config form with a confirm before the first arm, and a recent-events list).
+  `POST /deadman/test-release` (scoped to the caller) mints a one-time grant to the caller's **own**
+  verified contact address(es), creates a release tagged `manual_test`, and emails each a tokenized
+  `/r/<token>` link via `notify()` **without changing the switch state**, so a user can preview exactly
+  what their contacts will receive (`409 NO_VERIFIED_CONTACT` when the caller has no verified contact).
+- **`GET /api/release/{token}`** — **PUBLIC** (no session; mounted *before* `requireAuth`, token-only
+  authority) and **rate-limited** (`server/src/middleware/rate-limit.ts`, a tiny in-process fixed-window
+  limiter). When a switch fires (or a test-release runs), each verified contact is emailed a one-time
+  tokenized link to this route. The server hashes the supplied token, looks the **release grant** up by
+  hash, and — only when the grant is valid, **unviewed**, and **unexpired** — decrypts the note owner's
+  note server-side via the keyring, marks the grant `viewed_at` (**view-once**), and returns the note
+  exactly once. A second open or an expired grant → `410 Gone`; an unknown/malformed token → a generic
+  `404` disclosing nothing; a decrypt failure **fails closed** with `500` and leaves the grant unviewed
+  (retryable, never leaks plaintext). The SPA renders this on the public **`/r/:token`** view-once page
+  (prominent "this can only be opened once" warning + the note, or a "no longer available" message).
 
 **Sign-in** uses the server-side **OAuth 2.0 Authorization Code + PKCE** flow with Google
 (`google-auth-library`); the client secret never leaves the server. On success the server mints its
@@ -90,7 +104,7 @@ visitors to `/login`.
 
 ### Data store
 
-`better-sqlite3` (WAL, foreign keys on) at `./data/note.db` (`NOTE_DB_PATH`). Six tables:
+`better-sqlite3` (WAL, foreign keys on) at `./data/note.db` (`NOTE_DB_PATH`). Eight tables:
 
 - **`note`** — one row per owner, keyed by `user_id` (PRIMARY KEY → at most one note per user).
   Content is stored as `ciphertext` (BLOB) with the `key_version` that protects it (indexed) plus
@@ -112,7 +126,15 @@ visitors to `/login`.
   `(state, next_checkin_due_at)` so the engine cheaply selects due switches.
 - **`deadman_event`** — an append-only per-user audit log (`id` PK, `user_id` FK, `type`, optional JSON
   `detail`, `created_at`, indexed on `(user_id, created_at)`). `detail` never holds note plaintext or
-  any token.
+  any token. `type` includes `released` (recorded alongside `triggered` when a fired switch releases),
+  whose `detail` carries only a non-sensitive grant count.
+- **`release`** — one row per fired (or test) cycle (`id` PK, `user_id` FK, `trigger`
+  (`schedule`/`manual_test`), `created_at`); groups the grants created for that cycle.
+- **`release_grant`** — one row per recipient (`id` PK, `release_id` FK, `user_id` = the **note owner**
+  for decrypt, `contact_id` FK, `token_hash` UNIQUE, `expires_at`, view-once `viewed_at`, per-grant
+  `email_status`/`provider_message_id`/`email_error`, `created_at`), indexed on `token_hash`
+  (`idx_release_grant_token`) for the public lookup. Only the SHA-256 **hash** of the one-time token is
+  stored — never the raw token, never note plaintext.
 
 ### Encryption at rest
 
@@ -151,8 +173,19 @@ those decisions through injected `deps` (a notifier closure over the generic `no
 `Date` clock + a user-email resolver). It is **idempotent and state-guarded**, so repeated ticks never
 double-send a reminder beyond the cap nor re-trigger. On a missed deadline a switch moves `active → grace`,
 **grace reminders are emailed to the user's own account address** (via `notify()`, never a provider
-directly), capped per grace window; if grace also lapses it moves to `triggered` and records the event
-(actual release to contacts is a later feature).
+directly), capped per grace window; if grace also lapses it **triggers a release**.
+
+On trigger the engine snapshots **only verified contacts** (`verified_at != null`), creates a `release`,
+mints **one high-entropy grant token per contact** (storing only its SHA-256 hash + a 30-day
+`expires_at`, `RELEASE_GRANT_TTL_SECONDS`), emails each a tokenized `${APP_BASE_URL}/r/<token>` link via
+`notify()` (recording per-grant `email_status`; a single send failure is recorded `failed` and never
+aborts the batch), transitions to `triggered`, and records `triggered` + `released`. Release creation is
+**idempotent** — guarded on switch state **plus** an existing-release check — so the in-process timer and
+an external cron can never double-release. The shared mint/hash/compare helpers live in
+`server/src/deadman/tokens.ts` (reused by check-in links); the release email builder in
+`release-email.ts` carries no note plaintext. The note is decrypted **only** at the moment a valid grant
+link is opened on the public `GET /api/release/{token}` route (server-side, fail-closed), then the token
+burns.
 
 The tick is driven by an **in-process timer** (`driver.ts` → `startDeadmanTimer`, every `DEADMAN_TICK_MS`,
 default 60 s) wired into `server.ts` boot, which also runs a **one-shot boot-recovery tick** so a deadline
@@ -164,11 +197,11 @@ as **`npm run deadman:tick --workspace server`** (`cli/deadman-tick.ts`) for an 
 
 Mounted only when their env gate is set: `POST /api/test/login` (`AUTH_TEST_MODE=1`) mints a real
 session for a fake user without contacting Google; `POST /api/test/reset`
-(`NOTE_ALLOW_TEST_RESET=1`) clears the note, contacts, and switch state, and (same gate) mounts
-`GET /api/test/emails` so e2e can read back the verification link the server emailed; and
-`POST /api/test/deadman`
+(`NOTE_ALLOW_TEST_RESET=1`) clears the note, contacts, switch state, and releases/grants, and (same
+gate) mounts `GET /api/test/emails` so e2e can read back the verification or release link the server
+emailed; and `POST /api/test/deadman`
 (`DEADMAN_TEST_MODE=1`) fast-forwards the caller's switch deadlines into the past and runs one tick, so
-e2e can drive miss-deadline → grace without waiting real time. These let Playwright exercise the real
+e2e can drive miss-deadline → grace → triggered (and the resulting release) without waiting real time. These let Playwright exercise the real
 middleware and cookies while skipping Google's non-automatable consent screen.
 
 ## Run
@@ -313,6 +346,21 @@ sets `DEADMAN_TICK_DISABLED=1`** so the in-process timer never runs and the engi
 and an end-to-end round-trip (`e2e/contact-verification.spec.ts`: add → send → open the captured link →
 verified badge, asserting the raw token never leaks). The raw verification token appears in no test
 fixture, log, event, or serialized contact — only its SHA-256 hash is persisted.
+
+**Release & one-time delivery** is covered end to end: token-helper units
+(`server/tests/unit/deadman-tokens.test.ts`), release-repo units
+(`server/tests/unit/release-repo.test.ts`: create release/grants for verified-only, lookup-by-hash,
+single-use `markGrantViewed`, email status, idempotency guard), engine units
+(`server/tests/unit/engine-release.test.ts`: trigger → release + verified-only grants + emails via a spy
+notifier, idempotent re-tick, per-grant failure resilience), the manual test-release unit
+(`server/tests/unit/test-release.test.ts`: `manual_test` release, state untouched), Supertest contract
+tests for the public view-once route (`server/tests/contract/release-public.test.ts`: 200-once, 410
+replay/expired, 404 unknown/malformed, **500 fail-closed decrypt with `viewed_at` unset**, rate-limit)
+and the authed preview (`server/tests/contract/deadman-test-release.test.ts`), a client page test
+(`client/tests/pages/ReleaseViewPage.test.tsx`), and a full Playwright cycle
+(`e2e/release-delivery.spec.ts`: arm → fast-forward → grace → triggered → open `/r/<token>` once →
+reopen = gone). No raw grant token or note plaintext appears in any log, event, or persisted
+release/grant row — only the SHA-256 hash and the existing `note.ciphertext` are stored.
 
 **Merge gates** ([constitution](.specify/memory/constitution.md)): a change merges only when tests
 and e2e pass, `typecheck` passes, and UI changes meet the accessibility baseline (semantic HTML,

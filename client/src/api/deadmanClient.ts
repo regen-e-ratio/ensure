@@ -5,6 +5,7 @@ import { apiFetch } from "./http";
 export type DeadmanStatus = components["schemas"]["DeadmanStatus"];
 export type DeadmanConfigInput = components["schemas"]["DeadmanConfigInput"];
 export type DeadmanEvent = components["schemas"]["DeadmanEvent"];
+type TestReleaseResult = components["schemas"]["TestReleaseResult"];
 type ErrorResponse = components["schemas"]["Error"];
 
 export { ApiError };
@@ -66,4 +67,24 @@ export async function checkin(): Promise<DeadmanStatus> {
     throw new ApiError(await messageFrom(res, "Could not check in. Please try again."));
   }
   return (await res.json()) as DeadmanStatus;
+}
+
+/**
+ * Send a test release to the caller's own verified contact(s) (feature 010, US3) so they can
+ * preview the recipient experience without firing the switch. Resolves with the number of grants
+ * created, or throws ApiError with the server's message (e.g. no verified contact). Consumed by
+ * feature 012's preview CTA.
+ */
+export async function testRelease(): Promise<number> {
+  let res: Response;
+  try {
+    res = await apiFetch(`${DEADMAN_URL}/test-release`, { method: "POST" });
+  } catch {
+    throw new ApiError("Could not reach the server. No test release was sent.");
+  }
+  if (!res.ok) {
+    throw new ApiError(await messageFrom(res, "Could not send a test release. Please try again."));
+  }
+  const body = (await res.json()) as TestReleaseResult;
+  return body.grants;
 }

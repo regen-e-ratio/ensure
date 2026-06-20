@@ -5,6 +5,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { NotificationsTestPage } from "./pages/NotificationsTestPage";
 import { DeadmanDashboardPage } from "./pages/DeadmanDashboardPage";
 import { ContactVerifiedPage } from "./pages/ContactVerifiedPage";
+import { ReleaseViewPage } from "./pages/ReleaseViewPage";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { useAuth } from "./auth/useAuth";
 
@@ -42,6 +43,8 @@ export function App() {
       <Route path="/login" element={<LoginPage />} />
       {/* Public verification-result page (feature 009) — no session required. */}
       <Route path="/contact-verified" element={<ContactVerifiedPage />} />
+      {/* Public view-once release page (feature 010) — no session required. */}
+      <Route path="/r/:token" element={<ReleaseViewPage />} />
       <Route
         path="/"
         element={

@@ -12,6 +12,8 @@ import { createContactRouter } from "./routes/contact";
 import { createContactVerifyRouter } from "./routes/contact-verify";
 import { createNotificationsRouter } from "./routes/notifications";
 import { createDeadmanRouter } from "./routes/deadman";
+import { createReleaseRouter } from "./routes/release";
+import { createRateLimit } from "./middleware/rate-limit";
 import { clearDeadman } from "./deadman/config-repo";
 import { buildDeadmanDeps } from "./deadman/deps";
 import { createDeadmanFastForwardHandler } from "./test-support/deadman-fast-forward";
@@ -71,9 +73,25 @@ export function createApp(db: Db, options: AppOptions): Express {
   // PUBLIC verify route — token-only authority — mounted BEFORE the requireAuth-gated
   // /api/contact so an unauthenticated recipient can confirm their address (feature 009).
   app.use("/api/contact/verify", createContactVerifyRouter(db));
+  // PUBLIC release-view route (feature 010) — token-only authority, view-once — mounted BEFORE
+  // the requireAuth-gated mounts and rate-limited so a verified contact can read the note once
+  // without a session, while brute-force enumeration of grant tokens is throttled.
+  const releaseRateLimit = createRateLimit({ windowMs: 60_000, max: 30 });
+  app.use(
+    "/api/release",
+    releaseRateLimit,
+    createReleaseRouter(db, { keyring: options.encryption, now: () => new Date() }),
+  );
   app.use("/api/contact", requireAuth, createContactRouter(db, { appBaseUrl, emailProvider }));
   app.use("/api/notifications", requireAuth, createNotificationsRouter(emailProvider));
-  app.use("/api/deadman", requireAuth, createDeadmanRouter(db, { now: () => new Date() }));
+  app.use(
+    "/api/deadman",
+    requireAuth,
+    createDeadmanRouter(db, {
+      now: () => new Date(),
+      release: { keyring: options.encryption, appBaseUrl, emailProvider },
+    }),
+  );
 
   if (options.enableTestReset) {
     app.post("/api/test/reset", (_req, res) => {
@@ -96,7 +114,7 @@ export function createApp(db: Db, options: AppOptions): Express {
   // Test-only seam: fast-forward the caller's switch deadlines into the past for e2e (FR-020),
   // then run one tick so the transition is observable without the in-process timer.
   if (options.enableDeadmanTestMode) {
-    const deadmanDeps = buildDeadmanDeps(db, emailProvider);
+    const deadmanDeps = buildDeadmanDeps(db, emailProvider, appBaseUrl);
     app.post("/api/test/deadman", requireAuth, createDeadmanFastForwardHandler(db, deadmanDeps));
   }
 

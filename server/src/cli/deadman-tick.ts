@@ -23,11 +23,11 @@ async function main(): Promise<void> {
     debug: process.env.EMAIL_STUB_DEBUG === "1",
   });
   // loadDeadmanConfig is read for parity/validation; the CLI always runs one tick regardless
-  // of the in-process timer flag.
-  loadDeadmanConfig();
+  // of the in-process timer flag. The appBaseUrl is used to build release links (feature 010).
+  const deadman = loadDeadmanConfig();
 
   const db = openDb(dbPath);
-  const deps = buildDeadmanDeps(db, emailProvider);
+  const deps = buildDeadmanDeps(db, emailProvider, deadman.appBaseUrl);
   await runDeadmanTick(db, deps, deps.now());
 }
 

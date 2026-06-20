@@ -36,6 +36,7 @@ const EVENT_LABEL: Record<DeadmanEvent["type"], string> = {
   entered_grace: "Entered grace period",
   reminder_sent: "Reminder sent",
   triggered: "Triggered",
+  released: "Released to contacts",
   config_changed: "Configuration changed",
 };
 
