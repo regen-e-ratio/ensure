@@ -60,3 +60,13 @@ export const CONTACT_VERIFICATION_TTL_SECONDS = 86_400; // 24 hours
  * window. The grant is also single-use (consumed when `viewed_at` is set, view-once).
  */
 export const RELEASE_GRANT_TTL_SECONDS = 2_592_000; // 30 days
+
+/**
+ * Lifetime of a passwordless check-in token, in seconds (feature 011). Aligned to the
+ * default grace window so a reminder link stays live for as long as a reminder is
+ * actionable but cannot outlive its usefulness (it should not remain valid long after the
+ * grace window/trigger, preventing a stale link from resetting a re-armed switch). Shared so
+ * the minting engine stamps `expires_at` and the tests/client reason about the same window.
+ * The token is also single-use (consumed when `used_at` is set).
+ */
+export const CHECKIN_TOKEN_TTL_SECONDS = DEADMAN_DEFAULT_GRACE_SECONDS; // 2 days

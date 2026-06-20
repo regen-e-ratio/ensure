@@ -587,6 +587,39 @@ paths:
                 $ref: "#/components/schemas/Error"
               example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
   /deadman/checkin:
+    get:
+      operationId: checkInWithToken
+      summary: Check in from a passwordless email link (public, token-only)
+      description: >
+        PUBLIC (no session) endpoint a user opens from the one-time link embedded in a grace
+        reminder email (feature 011). Authority is possession of the unguessable token only: the
+        server hashes the supplied token, looks the check-in token up by hash, derives the owning
+        user from that row (no caller-supplied id, no session), and — only when the token is
+        valid, unused, and unexpired AND the switch is `active`/`grace` — performs the same
+        check-in the dashboard does (reset last_checkin_at/next_checkin_due_at, state back to
+        `active`, clear grace bookkeeping, record a `checkin` event), then marks the token used
+        (single-use) and returns `checked_in`. An already-used, expired, unknown, or malformed
+        token — or a token whose switch is `triggered`/`disarmed` — yields a generic
+        `not_available` result disclosing nothing (the non-checkable-switch case still consumes
+        the token so it cannot be replayed). The raw token is never logged or echoed.
+      parameters:
+        - in: query
+          name: token
+          required: true
+          schema: { type: string }
+          description: The one-time check-in token carried by the emailed link.
+      responses:
+        "200":
+          description: The check-in outcome (checked in, or a generic not-available result).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckinLinkResult"
+              examples:
+                checkedIn:
+                  value: { status: "checked_in" }
+                notAvailable:
+                  value: { status: "not_available" }
     post:
       operationId: checkinDeadman
       summary: Check in ("I'm alive") on the caller's own dead-man switch
@@ -881,6 +914,21 @@ components:
             confirmed; `already_verified` — a valid link for an already-confirmed contact
             (idempotent); `invalid_or_expired` — the token was missing, malformed, unknown,
             expired, or already used (fail-closed; discloses no contact/owner existence).
+    CheckinLinkResult:
+      type: object
+      additionalProperties: false
+      required: [status]
+      description: >
+        The outcome of opening a public passwordless check-in link (feature 011). A single
+        non-disclosing shape: `checked_in` — a valid, unused, unexpired token whose switch was
+        `active`/`grace` reset the clock back to `active`; `not_available` — every other case
+        (missing/malformed/unknown/used/expired token, or a `triggered`/`disarmed` switch),
+        disclosing nothing about whether any token/switch/user exists (fail-closed). Returned with
+        HTTP 200 for BOTH outcomes.
+      properties:
+        status:
+          type: string
+          enum: [checked_in, not_available]
     ReleaseView:
       type: object
       additionalProperties: false

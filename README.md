@@ -87,6 +87,17 @@ The SPA (`:5173`) calls the API under `/api/*` (Vite proxies to the server on `:
   `404` disclosing nothing; a decrypt failure **fails closed** with `500` and leaves the grant unviewed
   (retryable, never leaks plaintext). The SPA renders this on the public **`/r/:token`** view-once page
   (prominent "this can only be opened once" warning + the note, or a "no longer available" message).
+- **`GET /api/deadman/checkin?token=…`** — **PUBLIC** (no session; mounted *before* the
+  `requireAuth`-gated `/api/deadman`, token-only authority). Each grace reminder email embeds a
+  freshly-minted one-time `${APP_BASE_URL}/checkin?token=<token>` link. The server hashes the supplied
+  token, looks the **check-in token** up by hash, derives the owning user from that row, and — only when
+  the token is valid, **unused**, and **unexpired** and the switch is `active`/`grace` — performs the
+  same check-in the dashboard does (reuses `recordCheckin`: reset the clock back to `active`, clear grace
+  bookkeeping, record a `checkin` event), marks the token `used_at` (**single-use**), and returns
+  `{ status: "checked_in" }`. Every other case (missing/malformed/unknown/used/expired token, or a
+  `triggered`/`disarmed` switch) returns a generic `{ status: "not_available" }` disclosing nothing; a
+  non-checkable switch still **consumes** the token (replay-proof) but never resets the clock. The SPA
+  renders this on the public **`/checkin`** (= **`/checked-in`**) confirmation page.
 
 **Sign-in** uses the server-side **OAuth 2.0 Authorization Code + PKCE** flow with Google
 (`google-auth-library`); the client secret never leaves the server. On success the server mints its
@@ -104,7 +115,7 @@ visitors to `/login`.
 
 ### Data store
 
-`better-sqlite3` (WAL, foreign keys on) at `./data/note.db` (`NOTE_DB_PATH`). Eight tables:
+`better-sqlite3` (WAL, foreign keys on) at `./data/note.db` (`NOTE_DB_PATH`). Nine tables:
 
 - **`note`** — one row per owner, keyed by `user_id` (PRIMARY KEY → at most one note per user).
   Content is stored as `ciphertext` (BLOB) with the `key_version` that protects it (indexed) plus
@@ -135,6 +146,11 @@ visitors to `/login`.
   `email_status`/`provider_message_id`/`email_error`, `created_at`), indexed on `token_hash`
   (`idx_release_grant_token`) for the public lookup. Only the SHA-256 **hash** of the one-time token is
   stored — never the raw token, never note plaintext.
+- **`checkin_token`** — one row per reminder-minted passwordless check-in link (`id` PK, `user_id` FK,
+  `token_hash` UNIQUE, `expires_at`, single-use `used_at`, `created_at`), indexed on `token_hash`
+  (`idx_checkin_token_hash`) for the public check-in lookup. Only the SHA-256 **hash** of the one-time
+  token is stored — never the raw token. The owning `user_id` lets the public `GET /api/deadman/checkin`
+  derive the user without a session.
 
 ### Encryption at rest
 
@@ -173,7 +189,12 @@ those decisions through injected `deps` (a notifier closure over the generic `no
 `Date` clock + a user-email resolver). It is **idempotent and state-guarded**, so repeated ticks never
 double-send a reminder beyond the cap nor re-trigger. On a missed deadline a switch moves `active → grace`,
 **grace reminders are emailed to the user's own account address** (via `notify()`, never a provider
-directly), capped per grace window; if grace also lapses it **triggers a release**.
+directly), capped per grace window; if grace also lapses it **triggers a release**. Each grace reminder
+**mints a fresh one-time check-in token** (`mintCheckinLink` on the engine `deps`; stores only its
+SHA-256 hash + a `CHECKIN_TOKEN_TTL_SECONDS` `expires_at` in `checkin_token`) and embeds a single
+`${APP_BASE_URL}/checkin?token=<token>` link in the reminder body, so the user can stay alive from their
+inbox via the public `GET /api/deadman/checkin` route — no sign-in needed. A per-user mint failure is
+isolated by the tick's batch isolation and never aborts the others.
 
 On trigger the engine snapshots **only verified contacts** (`verified_at != null`), creates a `release`,
 mints **one high-entropy grant token per contact** (storing only its SHA-256 hash + a 30-day
@@ -361,6 +382,19 @@ and the authed preview (`server/tests/contract/deadman-test-release.test.ts`), a
 (`e2e/release-delivery.spec.ts`: arm → fast-forward → grace → triggered → open `/r/<token>` once →
 reopen = gone). No raw grant token or note plaintext appears in any log, event, or persisted
 release/grant row — only the SHA-256 hash and the existing `note.ciphertext` are stored.
+
+**Passwordless email check-in links** are covered end to end: check-in-token repo units
+(`server/tests/unit/checkin-token-repo.test.ts`: minting stores only the hash, lookup-by-hash, single-use
+`markUsed`, clear), engine reminder units (`server/tests/unit/engine-reminder-link.test.ts`: entering
+grace and each subsequent reminder mint a fresh `${APP_BASE_URL}/checkin?token=` link with no secret
+leaked, per-user mint-failure isolation), Supertest contract tests for the public route
+(`server/tests/contract/deadman-checkin-public.test.ts`: valid → `checked_in` + clock reset + `checkin`
+event + token used, second open / expired / unknown / malformed / missing → `not_available`,
+`triggered`/`disarmed` switch → `not_available` but token still consumed), a client page test
+(`client/tests/pages/CheckedInPage.test.tsx`), and a full Playwright cycle
+(`e2e/checkin-link.spec.ts`: arm → fast-forward → grace → open the captured reminder's check-in link →
+switch back to `active`). No raw check-in token or its hash appears in any log, event, email body beyond
+the single one-time link, or response — only the SHA-256 hash is persisted.
 
 **Merge gates** ([constitution](.specify/memory/constitution.md)): a change merges only when tests
 and e2e pass, `typecheck` passes, and UI changes meet the accessibility baseline (semantic HTML,

@@ -75,6 +75,14 @@ export interface Deps {
   now: () => Date;
   userEmailFor: (userId: string) => string | null;
   release?: ReleaseDeps;
+  /**
+   * Mint a fresh one-time check-in link for `userId` (feature 011): mint a high-entropy token,
+   * persist ONLY its SHA-256 hash in `checkin_token` with a future expiry, and return the absolute
+   * `${appBaseUrl}/checkin?token=<token>` link to embed in a reminder. Injected as a closure so the
+   * engine stays unit-testable with a spy. When omitted (008-era tests), reminders carry no link.
+   * The raw token is surfaced only inside the returned link — never stored or logged.
+   */
+  mintCheckinLink?: (userId: string) => string;
 }
 
 /** Whether `now` is at or after the absolute ISO deadline (inclusive boundary). */
@@ -110,15 +118,26 @@ export function evaluate(config: DeadmanConfig, now: Date): DeadmanDecision {
   }
 }
 
-/** Build the reminder message for a user's grace window (no secrets, FR-017). */
-function buildReminder(recipient: string): ReminderMessage {
+/**
+ * Build the reminder message for a user's grace window (no secret beyond the one-time link,
+ * FR-008/FR-017). When a `checkinLink` is supplied (feature 011) the body embeds a single
+ * `${appBaseUrl}/checkin?token=<token>` link so the user can check in straight from their inbox
+ * without signing in; the raw token appears only inside that link. When omitted (008-era tests),
+ * the body falls back to the sign-in-and-check-in instruction.
+ */
+function buildReminder(recipient: string, checkinLink: string | null): ReminderMessage {
+  const body = checkinLink
+    ? "Your Ensure dead-man switch missed its check-in deadline and is now in its grace " +
+      "period. Check in now to reset it — no sign-in needed — using your one-time link:\n" +
+      checkinLink +
+      "\n\nIf you do not check in before the grace period ends, your switch will fire."
+    : "Your Ensure dead-man switch missed its check-in deadline and is now in its grace " +
+      "period. Sign in and check in (\"I'm alive\") to reset it. If you do not check in " +
+      "before the grace period ends, your switch will fire.";
   return {
     recipient,
     subject: "Action needed: check in to your Ensure switch",
-    body:
-      "Your Ensure dead-man switch missed its check-in deadline and is now in its grace " +
-      "period. Sign in and check in (\"I'm alive\") to reset it. If you do not check in " +
-      "before the grace period ends, your switch will fire.",
+    body,
   };
 }
 
@@ -177,7 +196,10 @@ async function enterGrace(
 
   const email = deps.userEmailFor(config.userId);
   if (email) {
-    await deps.notify(buildReminder(email));
+    // Mint a fresh one-time check-in link for THIS reminder (feature 011); each reminder carries
+    // its own link. A null link (008-era deps without mintCheckinLink) falls back to no link.
+    const checkinLink = deps.mintCheckinLink ? deps.mintCheckinLink(config.userId) : null;
+    await deps.notify(buildReminder(email, checkinLink));
   }
   recordEvent(db, config.userId, "reminder_sent", { reminder: 1 }, nowIso);
 }
@@ -194,7 +216,8 @@ async function sendReminder(
 
   const email = deps.userEmailFor(config.userId);
   if (email) {
-    await deps.notify(buildReminder(email));
+    const checkinLink = deps.mintCheckinLink ? deps.mintCheckinLink(config.userId) : null;
+    await deps.notify(buildReminder(email, checkinLink));
   }
   recordEvent(db, config.userId, "reminder_sent", { reminder: remindersSent }, nowIso);
 }

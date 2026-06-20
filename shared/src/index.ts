@@ -11,5 +11,6 @@ export {
   DEADMAN_MAX_GRACE_REMINDERS,
   CONTACT_VERIFICATION_TTL_SECONDS,
   RELEASE_GRANT_TTL_SECONDS,
+  CHECKIN_TOKEN_TTL_SECONDS,
 } from "./constants";
 export type { components, paths } from "./api";

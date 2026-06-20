@@ -219,6 +219,8 @@ export function listDue(db: Db, now: string): DeadmanConfig[] {
 export function clearDeadman(db: Db): void {
   db.prepare("DELETE FROM release_grant").run();
   db.prepare("DELETE FROM release").run();
+  // Feature 011 — wipe minted check-in tokens so e2e runs start clean (FR-013).
+  db.prepare("DELETE FROM checkin_token").run();
   db.prepare("DELETE FROM deadman_event").run();
   db.prepare("DELETE FROM deadman_config").run();
 }

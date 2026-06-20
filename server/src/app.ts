@@ -13,6 +13,7 @@ import { createContactVerifyRouter } from "./routes/contact-verify";
 import { createNotificationsRouter } from "./routes/notifications";
 import { createDeadmanRouter } from "./routes/deadman";
 import { createReleaseRouter } from "./routes/release";
+import { createCheckinRouter } from "./routes/deadman-checkin";
 import { createRateLimit } from "./middleware/rate-limit";
 import { clearDeadman } from "./deadman/config-repo";
 import { buildDeadmanDeps } from "./deadman/deps";
@@ -82,6 +83,10 @@ export function createApp(db: Db, options: AppOptions): Express {
     releaseRateLimit,
     createReleaseRouter(db, { keyring: options.encryption, now: () => new Date() }),
   );
+  // PUBLIC passwordless check-in route (feature 011) — token-only authority, single-use — mounted
+  // BEFORE the requireAuth-gated /api/deadman mount so a user can check in from a reminder email
+  // link without a session. The owning user is derived from the token row, never from a session.
+  app.use("/api/deadman/checkin", createCheckinRouter(db, { now: () => new Date() }));
   app.use("/api/contact", requireAuth, createContactRouter(db, { appBaseUrl, emailProvider }));
   app.use("/api/notifications", requireAuth, createNotificationsRouter(emailProvider));
   app.use(

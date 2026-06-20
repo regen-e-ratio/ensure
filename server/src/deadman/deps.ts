@@ -5,6 +5,10 @@ import { notify } from "../notifications/notifier";
 import { getUser } from "../db/user-repo";
 import { listVerifiedContacts } from "../db/contact-repo";
 import { buildReleaseEmail } from "./release-email";
+import { buildCheckinLink } from "./checkin-link";
+import { mintToken, hashToken } from "./tokens";
+import { createCheckinToken } from "../db/checkin-token-repo";
+import { CHECKIN_TOKEN_TTL_SECONDS } from "@ensure/shared/constants";
 import type { Deps, ReminderMessage, ReleaseRecipient } from "./engine";
 
 /** Default absolute base URL used to build email links when none is supplied. */
@@ -30,6 +34,19 @@ export function buildDeadmanDeps(
   return {
     now: () => new Date(),
     userEmailFor: (userId: string) => getUser(db, userId)?.email ?? null,
+    // Feature 011: mint a fresh one-time check-in token, persist ONLY its SHA-256 hash with a
+    // future expiry, and return the absolute `${appBaseUrl}/checkin?token=<token>` link to embed
+    // in the reminder. The raw token is surfaced only inside the returned link — never stored or
+    // logged. A failure here is caught by runDeadmanTick's per-user batch isolation (FR-009).
+    mintCheckinLink: (userId: string): string => {
+      const token = mintToken();
+      const nowIso = new Date().toISOString();
+      const expiresAt = new Date(
+        Date.now() + CHECKIN_TOKEN_TTL_SECONDS * 1000,
+      ).toISOString();
+      createCheckinToken(db, userId, hashToken(token), expiresAt, nowIso);
+      return buildCheckinLink(appBaseUrl, token);
+    },
     notify: async (message: ReminderMessage): Promise<void> => {
       await notify(registry, {
         channel: "email",

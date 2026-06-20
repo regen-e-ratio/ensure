@@ -6,6 +6,7 @@ import { NotificationsTestPage } from "./pages/NotificationsTestPage";
 import { DeadmanDashboardPage } from "./pages/DeadmanDashboardPage";
 import { ContactVerifiedPage } from "./pages/ContactVerifiedPage";
 import { ReleaseViewPage } from "./pages/ReleaseViewPage";
+import { CheckedInPage } from "./pages/CheckedInPage";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { useAuth } from "./auth/useAuth";
 
@@ -45,6 +46,10 @@ export function App() {
       <Route path="/contact-verified" element={<ContactVerifiedPage />} />
       {/* Public view-once release page (feature 010) — no session required. */}
       <Route path="/r/:token" element={<ReleaseViewPage />} />
+      {/* Public passwordless check-in page (feature 011) — no session required. The reminder email
+          links to /checkin?token=…; /checked-in is the same confirmation page. */}
+      <Route path="/checkin" element={<CheckedInPage />} />
+      <Route path="/checked-in" element={<CheckedInPage />} />
       <Route
         path="/"
         element={

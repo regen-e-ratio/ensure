@@ -143,5 +143,24 @@ export function openDb(path: string): Db {
     CREATE INDEX IF NOT EXISTS idx_release_grant_token
       ON release_grant(token_hash);
   `);
+
+  // Feature 011 — passwordless email check-in links (roadmap §3). Each grace reminder mints a
+  // fresh one-time check-in token and persists ONLY its SHA-256 hash here (never the raw token),
+  // with the owning `user_id` (so the PUBLIC check-in route derives the user without a session),
+  // a future `expires_at`, and a nullable `used_at` (set on the first successful check-in;
+  // single-use). The index backs the public look-up by hash.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS checkin_token (
+      id         TEXT NOT NULL PRIMARY KEY,
+      user_id    TEXT NOT NULL REFERENCES user(id),
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at TEXT NOT NULL,
+      used_at    TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_checkin_token_hash
+      ON checkin_token(token_hash);
+  `);
   return db;
 }
