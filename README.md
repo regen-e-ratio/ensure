@@ -125,6 +125,10 @@ loads and is editable. It persists across reloads and server restarts; **Sign ou
 `/login`. The **Notifications** link (or <http://localhost:5173/notifications>) opens the notification
 test page.
 
+**Local DB helpers** (dev only) — per-table CLIs to inspect/seed the SQLite store, reading the same
+`server/.env` and database as the app: `db:user`, `db:contact`, `db:note` (decrypts via the keyring),
+`db:session`. Run e.g. `npm run db:user --workspace server -- -seed` or `... -- -h` for actions.
+
 ## Manual setup
 
 Two things cannot be derived from `npm install` and must be done by hand.
