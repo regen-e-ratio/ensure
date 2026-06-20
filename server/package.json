@@ -8,6 +8,10 @@
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
     "reencrypt": "tsx src/cli/reencrypt-notes.ts",
+    "db:user": "tsx src/cli/users_db_client.ts",
+    "db:contact": "tsx src/cli/contacts_db_client.ts",
+    "db:note": "tsx src/cli/notes_db_client.ts",
+    "db:session": "tsx src/cli/sessions_db_client.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
