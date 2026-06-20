@@ -343,6 +343,89 @@ paths:
       responses:
         "204":
           description: The contact was removed, or no matching contact existed (idempotent).
+  /contact/verify:
+    get:
+      operationId: confirmContactVerification
+      summary: Confirm a contact verification link (public, token-only)
+      description: >
+        PUBLIC (no session) endpoint that confirms control of a contact's address from the
+        link emailed by POST /contact/{id}/verify. Authority comes entirely from possession
+        of the unguessable token: the server hashes the supplied token, looks the contact up
+        by that hash, and uses no caller-supplied contact id or session. On a valid, unexpired,
+        unused token it sets the contact's `verified_at` and returns `verified` (or
+        `already_verified` if it was already confirmed). A missing, malformed, unknown, expired,
+        or already-used token yields a generic `invalid_or_expired` result that discloses
+        nothing about whether any contact or owner exists (fail-closed). The raw token is never
+        logged or echoed.
+      parameters:
+        - in: query
+          name: token
+          required: false
+          schema: { type: string }
+          description: The one-time verification token carried by the emailed link.
+      responses:
+        "200":
+          description: The verification outcome (success, already-verified, or invalid/expired).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContactVerifyResult"
+              examples:
+                verified:
+                  value: { status: "verified" }
+                alreadyVerified:
+                  value: { status: "already_verified" }
+                invalid:
+                  value: { status: "invalid_or_expired" }
+  /contact/{id}/verify:
+    post:
+      operationId: sendContactVerification
+      summary: Send (or resend) a verification email to one of the caller's contacts
+      description: >
+        Mints a high-entropy token, stores only its SHA-256 hash plus a future expiry on the
+        owned contact, and sends a verification email through the generic notify() dispatcher
+        (email channel) whose body carries a single APP_BASE_URL link with the raw token shown
+        once. Scoped to the caller (`req.user.id`): a contact id that is not the caller's own
+        is treated as not-found (404) and no email is sent. Resending is allowed and refreshes
+        the token (overwriting the prior hash + expiry), invalidating any earlier link. Requires
+        a valid access token.
+      security:
+        - sessionCookie: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+          description: The id of the caller's contact to verify.
+      responses:
+        "200":
+          description: The verification email was dispatched.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContactVerifySendResponse"
+              example: { sent: true }
+        "401":
+          description: No valid access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
+        "404":
+          description: No such contact for the caller (no email sent).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "NOT_FOUND", message: "Contact not found." }
+        "502":
+          description: The verification email could not be dispatched; the contact stays unverified.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "EMAIL_SEND_FAILED", message: "Could not send the verification email. Please try again." }
   /notifications/channels:
     get:
       operationId: getNotificationChannels
@@ -431,6 +514,232 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
               example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
+
+  /deadman:
+    get:
+      operationId: getDeadmanStatus
+      summary: Get the caller's own dead-man switch status
+      description: >
+        Returns the authenticated caller's dead-man switch status — the current state
+        (disarmed/active/grace/triggered), the configured interval and grace period, the
+        absolute deadlines, a derived secondsUntilDue countdown, and the most recent
+        events newest-first. A user who has never configured the switch gets a 200 with
+        the default interval/grace, state "disarmed", and null deadlines. Always scoped to
+        the caller — another user's switch is never returned. Requires a valid access token.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: The caller's switch status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeadmanStatus"
+        "401":
+          description: No valid access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
+  /deadman/config:
+    put:
+      operationId: putDeadmanConfig
+      summary: Configure, arm, or disarm the caller's own dead-man switch
+      description: >
+        Sets the caller's check-in interval and grace period (each validated against the
+        shared min/max bounds) and, via `enabled`, arms or disarms the switch. Arming
+        (enabled:true) transitions a disarmed switch to "active" and sets nextCheckinDueAt
+        to now + interval; disarming (enabled:false) transitions to "disarmed" and clears
+        the live deadlines. An out-of-bounds interval or grace is rejected with 400
+        VALIDATION_ERROR and no change. Records an armed/disarmed/config_changed event.
+        Requires a valid access token.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeadmanConfigInput"
+            examples:
+              arm:
+                value: { checkinIntervalSeconds: 604800, gracePeriodSeconds: 172800, enabled: true }
+      responses:
+        "200":
+          description: The configuration was applied; returns the updated status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeadmanStatus"
+        "400":
+          description: Validation failed (interval/grace out of bounds, missing, or non-integer).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "VALIDATION_ERROR", message: "Check-in interval is out of range." }
+        "401":
+          description: No valid access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
+  /deadman/checkin:
+    get:
+      operationId: checkInWithToken
+      summary: Check in from a passwordless email link (public, token-only)
+      description: >
+        PUBLIC (no session) endpoint a user opens from the one-time link embedded in a grace
+        reminder email (feature 011). Authority is possession of the unguessable token only: the
+        server hashes the supplied token, looks the check-in token up by hash, derives the owning
+        user from that row (no caller-supplied id, no session), and — only when the token is
+        valid, unused, and unexpired AND the switch is `active`/`grace` — performs the same
+        check-in the dashboard does (reset last_checkin_at/next_checkin_due_at, state back to
+        `active`, clear grace bookkeeping, record a `checkin` event), then marks the token used
+        (single-use) and returns `checked_in`. An already-used, expired, unknown, or malformed
+        token — or a token whose switch is `triggered`/`disarmed` — yields a generic
+        `not_available` result disclosing nothing (the non-checkable-switch case still consumes
+        the token so it cannot be replayed). The raw token is never logged or echoed.
+      parameters:
+        - in: query
+          name: token
+          required: true
+          schema: { type: string }
+          description: The one-time check-in token carried by the emailed link.
+      responses:
+        "200":
+          description: The check-in outcome (checked in, or a generic not-available result).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckinLinkResult"
+              examples:
+                checkedIn:
+                  value: { status: "checked_in" }
+                notAvailable:
+                  value: { status: "not_available" }
+    post:
+      operationId: checkinDeadman
+      summary: Check in ("I'm alive") on the caller's own dead-man switch
+      description: >
+        Resets the caller's switch on an active or grace switch — sets lastCheckinAt to
+        now, moves nextCheckinDueAt to now + interval, returns the state to "active",
+        clears grace bookkeeping, and records a checkin event. Rejected with 409 when the
+        switch is disarmed (no live deadline) or already triggered (cannot un-fire).
+        Requires a valid access token.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: The check-in was recorded; returns the updated status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeadmanStatus"
+        "409":
+          description: The switch is disarmed or already triggered, so a check-in does not apply.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                disarmed:
+                  value: { error: "NOT_ARMED", message: "The switch is not armed." }
+                triggered:
+                  value: { error: "ALREADY_TRIGGERED", message: "The switch has already fired." }
+        "401":
+          description: No valid access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
+  /deadman/test-release:
+    post:
+      operationId: testReleaseDeadman
+      summary: Preview the recipient experience by sending a test release to your own contacts
+      description: >
+        Mints a one-time grant to each of the caller's OWN verified contact address(es), creates
+        a release tagged `manual_test`, and emails each a tokenized `${APP_BASE_URL}/r/{token}`
+        link via the generic notify() dispatcher — WITHOUT changing the switch state — so a user
+        can preview exactly what their contacts will receive when the switch fires (feature 010,
+        the CTA feature 012 integrates). Scoped to the caller (`req.user.id`); sends only to the
+        caller's own verified addresses. Returns the number of grants created. Rejected with 409
+        when the caller has no verified contact (no email is sent). Requires a valid access token.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: A test release was created and emailed to the caller's own verified contact(s).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestReleaseResult"
+              example: { grants: 1 }
+        "401":
+          description: No valid access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
+        "409":
+          description: The caller has no verified contact, so there is nobody to send a test release to.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "NO_VERIFIED_CONTACT", message: "Verify a contact before sending a test release." }
+  /release/{token}:
+    get:
+      operationId: openRelease
+      summary: Open a one-time release link to read the note (public, token-only, view-once)
+      description: >
+        PUBLIC (no session) endpoint a verified contact opens from the tokenized link emailed
+        when a switch fires (feature 010). Authority is possession of the unguessable token only:
+        the server hashes the supplied token, looks the grant up by hash, and — only when the
+        grant is valid, unviewed, and unexpired — decrypts the note owner's note server-side via
+        the keyring, marks the grant viewed (view-once), and returns the note exactly once. A
+        second open, or an expired grant, yields 410 Gone. A missing/malformed/unknown token
+        yields a generic not-available result disclosing nothing. A decrypt failure fails closed
+        with 500 and leaves the grant unviewed (retryable) — the note plaintext is never leaked.
+        The route is rate-limited. The raw token is never logged or echoed.
+      parameters:
+        - in: path
+          name: token
+          required: true
+          schema: { type: string }
+          description: The one-time release-grant token carried by the emailed link.
+      responses:
+        "200":
+          description: The grant was valid and unviewed; the decrypted note is returned exactly once.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReleaseView"
+        "404":
+          description: No grant matches the token (unknown or malformed) — discloses nothing.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "NOT_AVAILABLE", message: "This link is not available." }
+        "410":
+          description: The grant has already been viewed or has expired (view-once / time-limited).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "GONE", message: "This link is no longer available." }
+        "500":
+          description: The note could not be decrypted; fail-closed, the grant stays unviewed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "DECRYPT_FAILED", message: "This message could not be opened. Please try again." }
 
   /test/login:
     post:
@@ -526,7 +835,7 @@ components:
     Contact:
       type: object
       additionalProperties: false
-      required: [id, type, value, createdAt]
+      required: [id, type, value, createdAt, verified, verifiedAt]
       properties:
         id:
           type: string
@@ -545,6 +854,19 @@ components:
           type: string
           format: date-time
           description: ISO 8601 UTC timestamp of when the contact was added.
+        verified:
+          type: boolean
+          description: >
+            Whether the contact has proven control of its address (feature 009). Derived
+            from `verified_at != null`; every pre-existing contact is unverified by default.
+            Only verified contacts ever receive a release (feature 010).
+        verifiedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            ISO 8601 UTC timestamp of when the contact was verified, or null if unverified.
+            The internal verification token hash and expiry are never serialized.
     ContactInput:
       type: object
       additionalProperties: false
@@ -569,6 +891,69 @@ components:
           items:
             $ref: "#/components/schemas/Contact"
           description: The caller's contacts, ordered by creation time (may be empty).
+    ContactVerifySendResponse:
+      type: object
+      additionalProperties: false
+      required: [sent]
+      properties:
+        sent:
+          type: boolean
+          description: >
+            True when the verification email was dispatched through the generic notify()
+            dispatcher to the contact's address (feature 009).
+    ContactVerifyResult:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [verified, already_verified, invalid_or_expired]
+          description: >
+            Outcome of opening a public verification link. `verified` — the contact was just
+            confirmed; `already_verified` — a valid link for an already-confirmed contact
+            (idempotent); `invalid_or_expired` — the token was missing, malformed, unknown,
+            expired, or already used (fail-closed; discloses no contact/owner existence).
+    CheckinLinkResult:
+      type: object
+      additionalProperties: false
+      required: [status]
+      description: >
+        The outcome of opening a public passwordless check-in link (feature 011). A single
+        non-disclosing shape: `checked_in` — a valid, unused, unexpired token whose switch was
+        `active`/`grace` reset the clock back to `active`; `not_available` — every other case
+        (missing/malformed/unknown/used/expired token, or a `triggered`/`disarmed` switch),
+        disclosing nothing about whether any token/switch/user exists (fail-closed). Returned with
+        HTTP 200 for BOTH outcomes.
+      properties:
+        status:
+          type: string
+          enum: [checked_in, not_available]
+    ReleaseView:
+      type: object
+      additionalProperties: false
+      required: [note]
+      description: >
+        The one-time decrypted note returned by the public release-view endpoint (feature 010)
+        on a valid, unviewed, unexpired grant. Materialized in memory only at the moment of a
+        valid open and never persisted outside the existing encrypted note; the grant's token is
+        then burned (view-once).
+      properties:
+        note:
+          type: string
+          description: The note owner's decrypted note content, returned exactly once.
+    TestReleaseResult:
+      type: object
+      additionalProperties: false
+      required: [grants]
+      description: >
+        The outcome of a manual test-release (feature 010): how many one-time grants were minted
+        and emailed to the caller's own verified address(es). The switch state is left unchanged.
+      properties:
+        grants:
+          type: integer
+          minimum: 0
+          description: The number of grants created and emailed to the caller's own verified contacts.
     Error:
       type: object
       additionalProperties: false
@@ -679,3 +1064,123 @@ components:
       required: [outcome]
       properties:
         outcome: { $ref: "#/components/schemas/SendOutcome" }
+    DeadmanState:
+      type: string
+      enum: [disarmed, active, grace, triggered]
+      description: >
+        The current state of a user's dead-man switch. "disarmed" = off; "active" =
+        armed and counting down; "grace" = a deadline was missed and the grace window is
+        running (reminders sent to the user); "triggered" = the grace window also lapsed
+        (in feature 008 this records the event; contact delivery is feature 010).
+    DeadmanEvent:
+      type: object
+      additionalProperties: false
+      required: [id, type, createdAt]
+      description: One append-only audit entry. `detail` never contains note plaintext or tokens.
+      properties:
+        id:
+          type: string
+          description: Server-assigned unique id for this event.
+        type:
+          type: string
+          enum:
+            [
+              armed,
+              disarmed,
+              checkin,
+              entered_grace,
+              reminder_sent,
+              triggered,
+              released,
+              config_changed,
+            ]
+          description: >
+            The kind of transition or action recorded. `released` accompanies `triggered`
+            when the fired switch creates a release and emails verified contacts (feature 010);
+            its detail carries only a non-sensitive grant count, never a token or plaintext.
+        detail:
+          type: ["string", "null"]
+          description: Optional JSON detail (never note plaintext or any token value).
+        createdAt:
+          type: string
+          format: date-time
+          description: ISO 8601 UTC timestamp of when the event was recorded.
+    DeadmanEventListResponse:
+      type: object
+      additionalProperties: false
+      required: [events]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/DeadmanEvent"
+          description: The caller's recent events, newest-first (may be empty).
+    DeadmanStatus:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          state,
+          enabled,
+          checkinIntervalSeconds,
+          gracePeriodSeconds,
+          lastCheckinAt,
+          nextCheckinDueAt,
+          graceDeadlineAt,
+          secondsUntilDue,
+          events,
+        ]
+      description: The caller's dead-man switch status, including a live countdown and recent events.
+      properties:
+        state: { $ref: "#/components/schemas/DeadmanState" }
+        enabled:
+          type: boolean
+          description: Whether the switch is currently armed (enabled).
+        checkinIntervalSeconds:
+          type: integer
+          description: The configured check-in interval, in seconds.
+        gracePeriodSeconds:
+          type: integer
+          description: The configured grace period, in seconds.
+        lastCheckinAt:
+          type: ["string", "null"]
+          format: date-time
+          description: ISO 8601 timestamp of the last check-in/arm, or null if never.
+        nextCheckinDueAt:
+          type: ["string", "null"]
+          format: date-time
+          description: Absolute next-check-in deadline, or null when disarmed/triggered.
+        graceDeadlineAt:
+          type: ["string", "null"]
+          format: date-time
+          description: Absolute grace deadline (set in the grace state), or null otherwise.
+        secondsUntilDue:
+          type: ["integer", "null"]
+          description: >
+            Seconds until the relevant deadline (next-check-in while active, grace deadline
+            while in grace), derived from the deadline and the current time; may be negative
+            if a tick has not yet run, or null when there is no live deadline.
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/DeadmanEvent"
+          description: The caller's recent events, newest-first (may be empty).
+    DeadmanConfigInput:
+      type: object
+      additionalProperties: false
+      required: [checkinIntervalSeconds, gracePeriodSeconds, enabled]
+      description: Configure the switch and arm/disarm it.
+      properties:
+        checkinIntervalSeconds:
+          type: integer
+          minimum: 3600
+          maximum: 31536000
+          description: Check-in interval in seconds (1 hour to 365 days).
+        gracePeriodSeconds:
+          type: integer
+          minimum: 3600
+          maximum: 2592000
+          description: Grace period in seconds (1 hour to 30 days).
+        enabled:
+          type: boolean
+          description: true arms the switch (→ active); false disarms it (→ disarmed).

@@ -54,6 +54,44 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AuthConfig {
   };
 }
 
+/**
+ * Runtime configuration for the dead-man liveness engine (feature 008). All vars are
+ * optional with safe defaults; the in-process timer is disabled when `DEADMAN_TICK_DISABLED=1`
+ * (tests, or when an external cron drives the engine), and the fast-forward test seam is
+ * mounted only when `DEADMAN_TEST_MODE=1`. No secret is involved, so nothing here is logged.
+ */
+export interface DeadmanConfig {
+  /** In-process tick interval (ms). Default 60000. */
+  tickMs: number;
+  /** When true (DEADMAN_TICK_DISABLED=1), the in-process timer never starts. */
+  tickDisabled: boolean;
+  /** Absolute base URL used to build links placed in emails. Default http://localhost:5173. */
+  appBaseUrl: string;
+  /** When true (DEADMAN_TEST_MODE=1), the POST /api/test/deadman fast-forward seam is mounted. */
+  testMode: boolean;
+}
+
+/** Default in-process tick interval, in milliseconds (FR-015). */
+const DEFAULT_DEADMAN_TICK_MS = 60000;
+/** Default absolute base URL used to build email links. */
+const DEFAULT_APP_BASE_URL = "http://localhost:5173";
+
+/**
+ * Read the dead-man engine configuration from env (alongside where EMAIL_PROVIDER is
+ * read in server.ts). All vars are optional; a non-numeric `DEADMAN_TICK_MS` falls back
+ * to the default rather than crashing the boot.
+ */
+export function loadDeadmanConfig(source: NodeJS.ProcessEnv = process.env): DeadmanConfig {
+  const rawTick = Number(source.DEADMAN_TICK_MS);
+  const tickMs = Number.isInteger(rawTick) && rawTick > 0 ? rawTick : DEFAULT_DEADMAN_TICK_MS;
+  return {
+    tickMs,
+    tickDisabled: source.DEADMAN_TICK_DISABLED === "1",
+    appBaseUrl: source.APP_BASE_URL ?? DEFAULT_APP_BASE_URL,
+    testMode: source.DEADMAN_TEST_MODE === "1",
+  };
+}
+
 const encryptionSchema = z.object({
   NOTE_ENC_KEYS: z.string().min(1, "NOTE_ENC_KEYS is required"),
   NOTE_ENC_ACTIVE_VERSION: z.string().min(1, "NOTE_ENC_ACTIVE_VERSION is required"),

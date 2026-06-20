@@ -15,7 +15,14 @@ const removeContactMock = vi.mocked(contactClient.removeContact);
 beforeEach(() => {
   vi.clearAllMocks();
   getContactsMock.mockResolvedValue([
-    { id: "1", type: "email", value: "alice@example.com", createdAt: "2026-06-07T10:00:00.000Z" },
+    {
+      id: "1",
+      type: "email",
+      value: "alice@example.com",
+      createdAt: "2026-06-07T10:00:00.000Z",
+      verified: false,
+      verifiedAt: null,
+    },
   ]);
 });
 

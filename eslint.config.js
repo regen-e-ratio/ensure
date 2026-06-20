@@ -10,6 +10,7 @@ export default tseslint.config(
       "shared/src/api.ts",
       "playwright-report/**",
       "test-results/**",
+      ".claude/**",
     ],
   },
   js.configs.recommended,

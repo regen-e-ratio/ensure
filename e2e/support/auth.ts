@@ -27,3 +27,38 @@ export async function resetNote(page: Page): Promise<void> {
 export async function resetContacts(page: Page): Promise<void> {
   await page.request.post("/api/test/reset");
 }
+
+/** Clear the dead-man switch config + events (test-only reset seam) so specs start clean. */
+export async function resetDeadman(page: Page): Promise<void> {
+  await page.request.post("/api/test/reset");
+}
+
+/**
+ * Read back the emails the server captured (feature 009 verification round-trip). Mounted
+ * behind the same NOTE_ALLOW_TEST_RESET gate as the reset seam — never in production. Returns
+ * the captured messages (most recent last) so a spec can extract the verification link.
+ */
+export async function capturedEmails(
+  page: Page,
+): Promise<{ to: string; subject: string; text?: string; html?: string }[]> {
+  const res = await page.request.get("/api/test/emails");
+  if (!res.ok()) {
+    throw new Error(`captured-emails failed with status ${res.status()}`);
+  }
+  const body = (await res.json()) as {
+    emails: { to: string; subject: string; text?: string; html?: string }[];
+  };
+  return body.emails;
+}
+
+/**
+ * Fast-forward the signed-in user's switch deadlines into the past via the env-gated test
+ * seam (POST /api/test/deadman, mounted only when DEADMAN_TEST_MODE=1), so a spec can force
+ * the miss-deadline → grace path without waiting real time. The page must be signed in.
+ */
+export async function fastForwardDeadman(page: Page): Promise<void> {
+  const res = await page.request.post("/api/test/deadman");
+  if (!res.ok()) {
+    throw new Error(`fast-forward deadman failed with status ${res.status()}`);
+  }
+}

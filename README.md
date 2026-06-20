@@ -39,11 +39,65 @@ The SPA (`:5173`) calls the API under `/api/*` (Vite proxies to the server on `:
   case-insensitively); `DELETE /:id` removes one (idempotent). Adds are rejected for a malformed/too-long
   email (`400`), a duplicate (`409 DUPLICATE_CONTACT`), or exceeding `CONTACT_LIMIT` (`409
   CONTACT_LIMIT_REACHED`). The SPA surfaces this at the protected **`/settings`** page.
+  Each contact also carries **verification state** (`verified_at`, `verification_token_hash`,
+  `verification_expires_at`); the serialized contact exposes a derived `verified` boolean and a
+  nullable `verifiedAt` (the hash/expiry stay internal). A contact must prove control of its address
+  before it can ever receive a release (prerequisite for the future release feature) — every
+  pre-existing contact is **unverified by default** (null `verified_at`).
+- **`POST /api/contact/{id}/verify`** (protected by `requireAuth`, scoped to the caller) — mints a
+  high-entropy token, stores **only its SHA-256 hash** plus a future expiry
+  (`CONTACT_VERIFICATION_TTL_SECONDS`, 24 h) on the owned contact, and sends a verification email
+  through the generic `notify()` dispatcher whose body carries a single `APP_BASE_URL` link
+  (`/contact-verified?token=…`) with the raw token shown once. A non-owned/absent id is `404` (no
+  email); resending refreshes the token (overwriting the prior hash/expiry, invalidating any earlier
+  link). The token mint/hash mirrors the session-token pattern (`server/src/contacts/`); the raw token
+  is never stored, logged, or serialized.
+- **`GET /api/contact/verify?token=…`** — **PUBLIC** (no session; mounted *before* `requireAuth`,
+  token-only authority). Hashes the token, looks the contact up by hash, enforces an inclusive expiry
+  boundary and single-use, sets `verified_at`, and returns `{ status: "verified" | "already_verified" |
+  "invalid_or_expired" }`. Expired/used/unknown/malformed tokens all return the generic
+  `invalid_or_expired` result (fail-closed, discloses no contact/owner existence). The SPA renders the
+  outcome on the public **`/contact-verified`** page; the contact list shows a text-labelled
+  verified/unverified badge and a "Send verification"/"Resend" action.
 - **`/api/notifications`** (protected by `requireAuth`) — the generic notification system.
   `GET /channels` lists each channel with its availability and input fields; `POST /test` sends one
   notification through the same generic capability any caller uses and returns an explicit outcome.
   Invalid input → `400 VALIDATION_ERROR` (no delivery); a known-but-disabled channel →
   `400 CHANNEL_NOT_SUPPORTED`; a delivery attempt → `200` with `{ outcome: { status: "sent" | "failed", … } }`.
+- **`/api/deadman`** (protected by `requireAuth`) — the per-user dead-man switch, scoped to the caller.
+  `GET /` returns the switch status (state, configured interval/grace, absolute deadlines, a derived
+  `secondsUntilDue` countdown, and recent events newest-first; a never-configured switch is `disarmed`
+  with defaults and null deadlines). `PUT /config` sets the interval/grace (validated against the shared
+  bounds) and arms (`enabled:true` → `active`, sets `nextCheckinDueAt = now + interval`) or disarms
+  (`enabled:false` → `disarmed`, clears deadlines). `POST /checkin` is the "I'm alive" reset on an
+  `active`/`grace` switch (→ `active`, deadline reset); it is rejected `409` when disarmed/triggered. The
+  SPA surfaces this at the protected **`/deadman`** dashboard (state badge, live countdown, big check-in
+  button, config form with a confirm before the first arm, and a recent-events list).
+  `POST /deadman/test-release` (scoped to the caller) mints a one-time grant to the caller's **own**
+  verified contact address(es), creates a release tagged `manual_test`, and emails each a tokenized
+  `/r/<token>` link via `notify()` **without changing the switch state**, so a user can preview exactly
+  what their contacts will receive (`409 NO_VERIFIED_CONTACT` when the caller has no verified contact).
+- **`GET /api/release/{token}`** — **PUBLIC** (no session; mounted *before* `requireAuth`, token-only
+  authority) and **rate-limited** (`server/src/middleware/rate-limit.ts`, a tiny in-process fixed-window
+  limiter). When a switch fires (or a test-release runs), each verified contact is emailed a one-time
+  tokenized link to this route. The server hashes the supplied token, looks the **release grant** up by
+  hash, and — only when the grant is valid, **unviewed**, and **unexpired** — decrypts the note owner's
+  note server-side via the keyring, marks the grant `viewed_at` (**view-once**), and returns the note
+  exactly once. A second open or an expired grant → `410 Gone`; an unknown/malformed token → a generic
+  `404` disclosing nothing; a decrypt failure **fails closed** with `500` and leaves the grant unviewed
+  (retryable, never leaks plaintext). The SPA renders this on the public **`/r/:token`** view-once page
+  (prominent "this can only be opened once" warning + the note, or a "no longer available" message).
+- **`GET /api/deadman/checkin?token=…`** — **PUBLIC** (no session; mounted *before* the
+  `requireAuth`-gated `/api/deadman`, token-only authority). Each grace reminder email embeds a
+  freshly-minted one-time `${APP_BASE_URL}/checkin?token=<token>` link. The server hashes the supplied
+  token, looks the **check-in token** up by hash, derives the owning user from that row, and — only when
+  the token is valid, **unused**, and **unexpired** and the switch is `active`/`grace` — performs the
+  same check-in the dashboard does (reuses `recordCheckin`: reset the clock back to `active`, clear grace
+  bookkeeping, record a `checkin` event), marks the token `used_at` (**single-use**), and returns
+  `{ status: "checked_in" }`. Every other case (missing/malformed/unknown/used/expired token, or a
+  `triggered`/`disarmed` switch) returns a generic `{ status: "not_available" }` disclosing nothing; a
+  non-checkable switch still **consumes** the token (replay-proof) but never resets the clock. The SPA
+  renders this on the public **`/checkin`** (= **`/checked-in`**) confirmation page.
 
 **Sign-in** uses the server-side **OAuth 2.0 Authorization Code + PKCE** flow with Google
 (`google-auth-library`); the client secret never leaves the server. On success the server mints its
@@ -61,7 +115,7 @@ visitors to `/login`.
 
 ### Data store
 
-`better-sqlite3` (WAL, foreign keys on) at `./data/note.db` (`NOTE_DB_PATH`). Four tables:
+`better-sqlite3` (WAL, foreign keys on) at `./data/note.db` (`NOTE_DB_PATH`). Nine tables:
 
 - **`note`** — one row per owner, keyed by `user_id` (PRIMARY KEY → at most one note per user).
   Content is stored as `ciphertext` (BLOB) with the `key_version` that protects it (indexed) plus
@@ -71,7 +125,32 @@ visitors to `/login`.
 - **`contact`** — a user's contacts (`id` PK, `user_id` FK, indexed). Carries an explicit `type`
   (`email` today; the column exists so future types need no migration), the `value` (original case)
   and a derived `value_norm` with `UNIQUE(user_id, type, value_norm)` for case-insensitive
-  de-duplication, plus `created_at`. Stored as plaintext (no encryption requirement).
+  de-duplication, plus `created_at`. Stored as plaintext (no encryption requirement). Also holds
+  per-contact **verification** columns — `verified_at` (null = unverified), `verification_token_hash`
+  (SHA-256 of the current token; the raw token is never stored), and `verification_expires_at` — added
+  nullably (no backfill) with a partial `idx_contact_verification_hash` index backing the public
+  token lookup.
+- **`deadman_config`** — one row per user (PK `user_id`) holding the switch `enabled` flag, the
+  `state` (`disarmed`/`active`/`grace`/`triggered`), the `checkin_interval_seconds`/`grace_period_seconds`,
+  the absolute `last_checkin_at`/`next_checkin_due_at`/`grace_deadline_at` timestamps (so restarts never
+  lose time or fire early), a `reminders_sent` counter, and timestamps. Indexed on
+  `(state, next_checkin_due_at)` so the engine cheaply selects due switches.
+- **`deadman_event`** — an append-only per-user audit log (`id` PK, `user_id` FK, `type`, optional JSON
+  `detail`, `created_at`, indexed on `(user_id, created_at)`). `detail` never holds note plaintext or
+  any token. `type` includes `released` (recorded alongside `triggered` when a fired switch releases),
+  whose `detail` carries only a non-sensitive grant count.
+- **`release`** — one row per fired (or test) cycle (`id` PK, `user_id` FK, `trigger`
+  (`schedule`/`manual_test`), `created_at`); groups the grants created for that cycle.
+- **`release_grant`** — one row per recipient (`id` PK, `release_id` FK, `user_id` = the **note owner**
+  for decrypt, `contact_id` FK, `token_hash` UNIQUE, `expires_at`, view-once `viewed_at`, per-grant
+  `email_status`/`provider_message_id`/`email_error`, `created_at`), indexed on `token_hash`
+  (`idx_release_grant_token`) for the public lookup. Only the SHA-256 **hash** of the one-time token is
+  stored — never the raw token, never note plaintext.
+- **`checkin_token`** — one row per reminder-minted passwordless check-in link (`id` PK, `user_id` FK,
+  `token_hash` UNIQUE, `expires_at`, single-use `used_at`, `created_at`), indexed on `token_hash`
+  (`idx_checkin_token_hash`) for the public check-in lookup. Only the SHA-256 **hash** of the one-time
+  token is stored — never the raw token. The owning `user_id` lets the public `GET /api/deadman/checkin`
+  derive the user without a session.
 
 ### Encryption at rest
 
@@ -101,12 +180,68 @@ and selected via `EMAIL_PROVIDER` — see `specs/005-notifications-system/email-
 client `/notifications` page (gated behind sign-in) drives its form from `GET /channels` and lets an
 operator send a test notification and see the outcome.
 
+### Liveness engine (dead-man switch)
+
+The per-user dead-man switch lives in `server/src/deadman/`. A **pure `evaluate(config, now)`**
+(`engine.ts`) decides the next transition for one switch (`stay`/`enter_grace`/`remind`/`trigger`/`noop`)
+with no I/O; **`runDeadmanTick(db, deps, now)`** loads due switches (`config-repo.listDue`) and applies
+those decisions through injected `deps` (a notifier closure over the generic `notify()` dispatcher + a
+`Date` clock + a user-email resolver). It is **idempotent and state-guarded**, so repeated ticks never
+double-send a reminder beyond the cap nor re-trigger. On a missed deadline a switch moves `active → grace`,
+**grace reminders are emailed to the user's own account address** (via `notify()`, never a provider
+directly), capped per grace window; if grace also lapses it **triggers a release**. Each grace reminder
+**mints a fresh one-time check-in token** (`mintCheckinLink` on the engine `deps`; stores only its
+SHA-256 hash + a `CHECKIN_TOKEN_TTL_SECONDS` `expires_at` in `checkin_token`) and embeds a single
+`${APP_BASE_URL}/checkin?token=<token>` link in the reminder body, so the user can stay alive from their
+inbox via the public `GET /api/deadman/checkin` route — no sign-in needed. A per-user mint failure is
+isolated by the tick's batch isolation and never aborts the others.
+
+On trigger the engine snapshots **only verified contacts** (`verified_at != null`), creates a `release`,
+mints **one high-entropy grant token per contact** (storing only its SHA-256 hash + a 30-day
+`expires_at`, `RELEASE_GRANT_TTL_SECONDS`), emails each a tokenized `${APP_BASE_URL}/r/<token>` link via
+`notify()` (recording per-grant `email_status`; a single send failure is recorded `failed` and never
+aborts the batch), transitions to `triggered`, and records `triggered` + `released`. Release creation is
+**idempotent** — guarded on switch state **plus** an existing-release check — so the in-process timer and
+an external cron can never double-release. The shared mint/hash/compare helpers live in
+`server/src/deadman/tokens.ts` (reused by check-in links); the release email builder in
+`release-email.ts` carries no note plaintext. The note is decrypted **only** at the moment a valid grant
+link is opened on the public `GET /api/release/{token}` route (server-side, fail-closed), then the token
+burns.
+
+The tick is driven by an **in-process timer** (`driver.ts` → `startDeadmanTimer`, every `DEADMAN_TICK_MS`,
+default 60 s) wired into `server.ts` boot, which also runs a **one-shot boot-recovery tick** so a deadline
+that lapsed while the process was down is evaluated on startup. The timer is **disabled** when
+`DEADMAN_TICK_DISABLED=1` (tests, or when an external scheduler is used). The same single tick is exposed
+as **`npm run deadman:tick --workspace server`** (`cli/deadman-tick.ts`) for an external cron/k8s CronJob.
+
+### Onboarding & help (client)
+
+The dead-man dashboard (`/deadman`) carries a thin, **client-only** onboarding/help/polish layer
+(feature 012) — it adds **no** endpoint, table, column, env var, or external service. A **first-run**
+(never-armed) user — derived purely from existing reads (`GET /api/deadman` reporting `disarmed` with
+no prior arm: no `armed` event and a null `last_checkin_at`, plus `GET /api/note` and
+`GET /api/contact`) — is offered a **dismissible, non-blocking guided wizard** (`OnboardingWizard`)
+that walks them through write a note → add & verify a contact → set interval/grace → **arm** (an
+explicit confirm precedes the first arm). Each step drives an **existing** endpoint via the existing
+`NoteEditor`/`ContactList`/`putConfig`; the wizard resumes at the first incomplete step, and its
+dismissal is **session-local** (`sessionStorage`) — it writes no backend state. An always-available
+**"How this works"** explainer (`DeadmanHelp`) describes the model and can relaunch the wizard. Both
+surface feature 010's **"send myself a test release"** CTA (`TestReleaseCta`, guarded on a verified
+contact). The layer renders/persists **no** token, grant, or note plaintext — the only secret is the
+emailed one-time release link. Empty states and the live countdown are polished for legibility and
+screen readers without changing any timing semantics. All dead-man UI (008–012) meets the
+accessibility baseline below.
+
 ### Test seams (never in production)
 
 Mounted only when their env gate is set: `POST /api/test/login` (`AUTH_TEST_MODE=1`) mints a real
-session for a fake user without contacting Google, and `POST /api/test/reset`
-(`NOTE_ALLOW_TEST_RESET=1`) clears the note and contacts. These let Playwright exercise the real middleware and
-cookies while skipping Google's non-automatable consent screen.
+session for a fake user without contacting Google; `POST /api/test/reset`
+(`NOTE_ALLOW_TEST_RESET=1`) clears the note, contacts, switch state, and releases/grants, and (same
+gate) mounts `GET /api/test/emails` so e2e can read back the verification or release link the server
+emailed; and `POST /api/test/deadman`
+(`DEADMAN_TEST_MODE=1`) fast-forwards the caller's switch deadlines into the past and runs one tick, so
+e2e can drive miss-deadline → grace → triggered (and the resulting release) without waiting real time. These let Playwright exercise the real
+middleware and cookies while skipping Google's non-automatable consent screen.
 
 ## Run
 
@@ -123,7 +258,15 @@ npm run dev:client     # Vite SPA on  http://localhost:5173    (proxies /api -> 
 Open <http://localhost:5173> → you are redirected to `/login` → **Sign in with Google** → the note
 loads and is editable. It persists across reloads and server restarts; **Sign out** returns you to
 `/login`. The **Notifications** link (or <http://localhost:5173/notifications>) opens the notification
-test page.
+test page; the **Switch** link (or <http://localhost:5173/deadman>) opens the dead-man switch dashboard.
+
+The server runs the **in-process liveness timer** automatically on boot (every `DEADMAN_TICK_MS`,
+default 60 s; recovers any due switch on startup). To drive the engine from an external scheduler
+instead, set `DEADMAN_TICK_DISABLED=1` and run one tick per cron interval:
+
+```bash
+npm run deadman:tick --workspace server   # runs a single liveness tick, then exits
+```
 
 **Local DB helpers** (dev only) — per-table CLIs to inspect/seed the SQLite store, reading the same
 `server/.env` and database as the app: `db:user`, `db:contact`, `db:note` (decrypts via the keyring),
@@ -193,10 +336,20 @@ the backend received, to verify the test-page fields reach the backend. It is **
 applies only to the stub. ⚠️ Enabling it writes recipient and message content to the console, so use
 it only on your local machine — never set it in a shared or production environment.
 
-**Test-only** (optional; never enable in production): `AUTH_TEST_MODE=1` mounts the test-login seam
-and `NOTE_ALLOW_TEST_RESET=1` mounts the reset route. The e2e suite sets these (and dummy Google/JWT
-values **and a test keyring**) itself — see [`playwright.config.ts`](playwright.config.ts) — so you
-do **not** need real Google credentials or keys to run e2e.
+**Optional — dead-man liveness engine** (feature 008; all have safe defaults, none is a secret):
+
+| Variable                | Purpose |
+|-------------------------|---------|
+| `DEADMAN_TICK_MS`       | In-process liveness tick interval in ms (default `60000`). |
+| `DEADMAN_TICK_DISABLED` | Set `1` to turn off the in-process timer (use an external cron driving `npm run deadman:tick --workspace server`, or set by tests so the timer never runs). |
+| `APP_BASE_URL`          | Absolute base URL used to build links placed in emails (default `http://localhost:5173`). |
+| `DEADMAN_TEST_MODE`     | **Test-only** — set `1` to mount `POST /api/test/deadman` (fast-forwards a switch's deadlines for e2e). Never enable in production. |
+
+**Test-only** (optional; never enable in production): `AUTH_TEST_MODE=1` mounts the test-login seam,
+`NOTE_ALLOW_TEST_RESET=1` mounts the reset route, and `DEADMAN_TEST_MODE=1` mounts the deadman
+fast-forward seam. The e2e suite sets these (plus `DEADMAN_TICK_DISABLED=1` so the timer stays off, and
+dummy Google/JWT values **and a test keyring**) itself — see [`playwright.config.ts`](playwright.config.ts)
+— so you do **not** need real Google credentials or keys to run e2e.
 
 ## Tests
 
@@ -215,6 +368,64 @@ PW_CHANNEL=chrome npm run test:e2e
 
 In CI, install the browser normally (`npx playwright install --with-deps chromium`) and run without
 `PW_CHANNEL`.
+
+The dead-man **liveness engine** is exhaustively unit-tested with an injected clock + a spy notifier
+(`server/tests/unit/deadman-*`) and via Supertest contract tests (`server/tests/contract/deadman-*`); the
+dashboard has RTL tests and there is a Playwright spec (`e2e/deadman.spec.ts`). **Every server/e2e test
+sets `DEADMAN_TICK_DISABLED=1`** so the in-process timer never runs and the engine is driven explicitly via
+`runDeadmanTick` (the test helper and `playwright.config.ts` set this for you).
+
+**Contact verification** is covered at every layer: token helper units
+(`server/tests/unit/contact-verification-token.test.ts`), repo units for the verification helpers,
+`toContact`, idempotent `markVerified`, and single-use/resend-supersede
+(`server/tests/unit/contact-repo.test.ts`), Supertest contract tests for the authed send
+(`server/tests/contract/contact-verify-send.test.ts`) and the public, fail-closed verify
+(`server/tests/contract/contact-verify-public.test.ts`), client component/page tests
+(`client/tests/components/ContactList.verify.test.tsx`, `client/tests/pages/ContactVerifiedPage.test.tsx`),
+and an end-to-end round-trip (`e2e/contact-verification.spec.ts`: add → send → open the captured link →
+verified badge, asserting the raw token never leaks). The raw verification token appears in no test
+fixture, log, event, or serialized contact — only its SHA-256 hash is persisted.
+
+**Release & one-time delivery** is covered end to end: token-helper units
+(`server/tests/unit/deadman-tokens.test.ts`), release-repo units
+(`server/tests/unit/release-repo.test.ts`: create release/grants for verified-only, lookup-by-hash,
+single-use `markGrantViewed`, email status, idempotency guard), engine units
+(`server/tests/unit/engine-release.test.ts`: trigger → release + verified-only grants + emails via a spy
+notifier, idempotent re-tick, per-grant failure resilience), the manual test-release unit
+(`server/tests/unit/test-release.test.ts`: `manual_test` release, state untouched), Supertest contract
+tests for the public view-once route (`server/tests/contract/release-public.test.ts`: 200-once, 410
+replay/expired, 404 unknown/malformed, **500 fail-closed decrypt with `viewed_at` unset**, rate-limit)
+and the authed preview (`server/tests/contract/deadman-test-release.test.ts`), a client page test
+(`client/tests/pages/ReleaseViewPage.test.tsx`), and a full Playwright cycle
+(`e2e/release-delivery.spec.ts`: arm → fast-forward → grace → triggered → open `/r/<token>` once →
+reopen = gone). No raw grant token or note plaintext appears in any log, event, or persisted
+release/grant row — only the SHA-256 hash and the existing `note.ciphertext` are stored.
+
+**Passwordless email check-in links** are covered end to end: check-in-token repo units
+(`server/tests/unit/checkin-token-repo.test.ts`: minting stores only the hash, lookup-by-hash, single-use
+`markUsed`, clear), engine reminder units (`server/tests/unit/engine-reminder-link.test.ts`: entering
+grace and each subsequent reminder mint a fresh `${APP_BASE_URL}/checkin?token=` link with no secret
+leaked, per-user mint-failure isolation), Supertest contract tests for the public route
+(`server/tests/contract/deadman-checkin-public.test.ts`: valid → `checked_in` + clock reset + `checkin`
+event + token used, second open / expired / unknown / malformed / missing → `not_available`,
+`triggered`/`disarmed` switch → `not_available` but token still consumed), a client page test
+(`client/tests/pages/CheckedInPage.test.tsx`), and a full Playwright cycle
+(`e2e/checkin-link.spec.ts`: arm → fast-forward → grace → open the captured reminder's check-in link →
+switch back to `active`). No raw check-in token or its hash appears in any log, event, email body beyond
+the single one-time link, or response — only the SHA-256 hash is persisted.
+
+**Onboarding & help (client-only, feature 012)** is covered by component tests for the guided wizard
+(`client/tests/components/OnboardingWizard.firstRun.test.tsx` — offered on a derived first-run, not
+auto-shown once ever-armed; `OnboardingWizard.steps.test.tsx` — step progress/resume + arm-on-confirm;
+`OnboardingWizard.dismiss.test.tsx` — Escape/Skip hides + session-scoped, no backend write;
+`OnboardingWizard.testRelease.test.tsx` — the guarded preview CTA, accessible confirmation/error, and
+**no token/grant/plaintext** rendered), the help explainer (`DeadmanHelp.test.tsx`), the legible
+countdown formatter (`DeadmanDashboard.countdown.test.tsx`), and the empty state (`EmptyState.test.tsx`),
+plus a first-run Playwright flow (`e2e/onboarding.spec.ts`: wizard offered → note → add + verify a
+contact → set interval/grace → confirm arm → switch active + wizard steps aside; plus the dismiss
+path), which also keeps `DEADMAN_TICK_DISABLED=1` and reuses the `AUTH_TEST_MODE`/`DEADMAN_TEST_MODE`
+seams. This feature adds no server code and no contract change; `contracts/openapi.yaml` and
+`shared/src/api.ts` are unchanged.
 
 **Merge gates** ([constitution](.specify/memory/constitution.md)): a change merges only when tests
 and e2e pass, `typecheck` passes, and UI changes meet the accessibility baseline (semantic HTML,

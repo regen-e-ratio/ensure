@@ -25,6 +25,8 @@ describe("ContactList — add (US2)", () => {
       type: "email",
       value: "alice@example.com",
       createdAt: "2026-06-07T10:00:00.000Z",
+      verified: false,
+      verifiedAt: null,
     });
     const user = userEvent.setup();
     render(<ContactList />);
@@ -63,6 +65,8 @@ describe("ContactList — add (US2)", () => {
         type: "email" as const,
         value: `user${i}@example.com`,
         createdAt: "2026-06-07T10:00:00.000Z",
+        verified: false,
+        verifiedAt: null,
       })),
     );
     render(<ContactList />);
