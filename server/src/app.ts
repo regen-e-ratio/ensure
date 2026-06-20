@@ -100,9 +100,11 @@ export function createApp(db: Db, options: AppOptions): Express {
 
   if (options.enableTestReset) {
     app.post("/api/test/reset", (_req, res) => {
+      // Order matters with foreign_keys=ON: clearDeadman removes release_grant rows
+      // (which REFERENCES contact(id)) before clearContacts deletes the contacts they point at.
+      clearDeadman(db);
       clearNote(db);
       clearContacts(db);
-      clearDeadman(db);
       if (capturingProvider) capturingProvider.captured.length = 0;
       res.status(204).end();
     });
