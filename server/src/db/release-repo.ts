@@ -166,3 +166,15 @@ export function hasReleaseForCurrentCycle(db: Db, userId: string): boolean {
     .get(userId) as { 1: number } | undefined;
   return row !== undefined;
 }
+
+/**
+ * Whether `err` is a SQLite UNIQUE / PRIMARY KEY constraint violation. The engine uses this to make
+ * the scheduled-release claim atomic across processes: `idx_release_one_schedule_per_user` lets only
+ * one connection insert the `schedule` release for a user, so a concurrent tick that loses the race
+ * throws this — which the caller treats as "already released" rather than double-delivering.
+ */
+export function isUniqueConstraintError(err: unknown): boolean {
+  if (!(err instanceof Error) || !("code" in err)) return false;
+  const code = (err as { code?: unknown }).code;
+  return code === "SQLITE_CONSTRAINT_UNIQUE" || code === "SQLITE_CONSTRAINT_PRIMARYKEY";
+}

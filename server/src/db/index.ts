@@ -27,6 +27,10 @@ export function openDb(path: string): Db {
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
+  // Make concurrent writers (the in-process liveness timer and an external `deadman:tick` cron run
+  // on separate connections) wait for a lock instead of immediately throwing SQLITE_BUSY, so a
+  // release transaction is not silently dropped mid-flight under contention.
+  db.pragma("busy_timeout = 5000");
   db.exec(`
     CREATE TABLE IF NOT EXISTS note (
       user_id     TEXT    PRIMARY KEY REFERENCES user(id),
@@ -142,6 +146,15 @@ export function openDb(path: string): Db {
 
     CREATE INDEX IF NOT EXISTS idx_release_grant_token
       ON release_grant(token_hash);
+
+    -- Durable idempotency for the engine fire (FR-005, SC-002): at most one 'schedule' release per
+    -- user, ever. This makes the never-double-release guarantee atomic across processes -- when the
+    -- in-process timer and an external deadman:tick cron evaluate the same grace switch at once,
+    -- only one INSERT can win; the loser's INSERT fails the unique constraint and the engine treats
+    -- it as already-released (no second release, grants, or duplicate recipient emails). Manual
+    -- test-releases (trigger='manual_test') are intentionally unconstrained so previews can repeat.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_release_one_schedule_per_user
+      ON release(user_id) WHERE trigger = 'schedule';
   `);
 
   // Feature 011 — passwordless email check-in links (roadmap §3). Each grace reminder mints a

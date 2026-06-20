@@ -9,6 +9,7 @@ import {
 import { getConfig, upsertConfig } from "../../src/deadman/config-repo";
 import { listEvents } from "../../src/deadman/event-repo";
 import { addContact, markVerified } from "../../src/db/contact-repo";
+import { createRelease } from "../../src/db/release-repo";
 
 let db: Db;
 let reminders: ReminderMessage[];
@@ -169,6 +170,56 @@ describe("runDeadmanTick — idempotent release (US1, FR-005)", () => {
     expect(byContact[b.id]).toBe("sent");
     // The batch still completed and the switch fired.
     expect(getConfig(db, "u1")?.state).toBe("triggered");
+  });
+});
+
+describe("release uniqueness — durable cross-process idempotency (FR-005, SC-002)", () => {
+  it("the DB allows at most one 'schedule' release per user; manual_test is unconstrained", () => {
+    createRelease(db, "u1", "schedule", NOW);
+    // A second scheduled release for the same user is rejected at the DB level (the partial
+    // UNIQUE index), so a racing process can never create a duplicate cycle.
+    expect(() => createRelease(db, "u1", "schedule", NOW)).toThrow();
+    // Manual previews are intentionally repeatable.
+    expect(() => {
+      createRelease(db, "u1", "manual_test", NOW);
+      createRelease(db, "u1", "manual_test", NOW);
+    }).not.toThrow();
+  });
+
+  it("a tick that loses the claim race transitions to triggered without double-delivering", async () => {
+    const verified = addContact(db, "u1", "email", "v@example.com");
+    markVerified(db, verified.id, NOW);
+
+    upsertConfig(db, "u1", ARM, NOW);
+    await runDeadmanTick(db, makeDeps(new Date("2026-06-28T00:00:00.000Z")), new Date("2026-06-28T00:00:00.000Z"));
+    reminders = [];
+    releaseEmails = [];
+
+    // Simulate a concurrent process winning the claim between this tick's fast-path check and its
+    // own INSERT: the first listVerifiedContacts call inserts the competing 'schedule' release, so
+    // this tick's createRelease then loses the partial-UNIQUE race.
+    const triggerNow = new Date("2026-07-05T00:00:00.000Z");
+    const racingDeps = makeDeps(triggerNow);
+    const realList = racingDeps.release!.listVerifiedContacts;
+    let raced = false;
+    racingDeps.release!.listVerifiedContacts = (userId: string) => {
+      if (!raced) {
+        raced = true;
+        createRelease(db, userId, "schedule", triggerNow.toISOString());
+      }
+      return realList(userId);
+    };
+
+    // Must not throw out of the tick, and must not double-deliver.
+    await expect(runDeadmanTick(db, racingDeps, triggerNow)).resolves.toBeUndefined();
+
+    expect(getConfig(db, "u1")?.state).toBe("triggered");
+    const schedReleases = db
+      .prepare("SELECT * FROM release WHERE user_id = ? AND trigger = 'schedule'")
+      .all("u1");
+    expect(schedReleases).toHaveLength(1); // only the winner's
+    expect((db.prepare("SELECT COUNT(*) AS n FROM release_grant").get() as { n: number }).n).toBe(0);
+    expect(releaseEmails).toHaveLength(0); // the loser sent nothing
   });
 });
 

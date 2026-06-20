@@ -15,6 +15,7 @@ import {
   createGrants,
   setGrantEmailStatus,
   hasReleaseForCurrentCycle,
+  isUniqueConstraintError,
   type GrantSeed,
 } from "../db/release-repo";
 import { mintToken, hashToken } from "./tokens";
@@ -241,7 +242,7 @@ async function trigger(
 ): Promise<void> {
   const userId = config.userId;
 
-  // Idempotency guard: never create a second scheduled release for an already-released cycle.
+  // Fast-path idempotency: never create a second scheduled release for an already-released cycle.
   if (deps.release && hasReleaseForCurrentCycle(db, userId)) {
     // Ensure the state is at least `triggered` (defensive); create no new release/grants/events.
     setState(db, userId, "triggered", { graceDeadlineAt: config.graceDeadlineAt }, nowIso);
@@ -249,13 +250,25 @@ async function trigger(
   }
 
   let grantCount = 0;
+  let released = false;
   if (deps.release) {
-    grantCount = await deliverRelease(db, deps.release, userId, "schedule", nowIso);
+    try {
+      grantCount = await deliverRelease(db, deps.release, userId, "schedule", nowIso);
+      released = true;
+    } catch (err) {
+      // Durable idempotency across processes: the `schedule` release is guarded by a partial UNIQUE
+      // index, so if a concurrent tick (in-process timer + external `deadman:tick` cron) already
+      // claimed this cycle, our INSERT loses with a unique violation. Treat that as already-released
+      // — transition only, never double-deliver. Any other error propagates to the batch handler.
+      if (!isUniqueConstraintError(err)) throw err;
+      setState(db, userId, "triggered", { graceDeadlineAt: config.graceDeadlineAt }, nowIso);
+      return;
+    }
   }
 
   setState(db, userId, "triggered", { graceDeadlineAt: config.graceDeadlineAt }, nowIso);
   recordEvent(db, userId, "triggered", null, nowIso);
-  if (deps.release) {
+  if (released) {
     // Non-sensitive metadata only: the number of grants created (FR-017, SC-008).
     recordEvent(db, userId, "released", { grants: grantCount }, nowIso);
   }
