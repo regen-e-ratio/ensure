@@ -35,6 +35,11 @@ export default defineConfig({
         // Deterministic single-version encryption keyring for e2e (base64 of 32 bytes).
         NOTE_ENC_KEYS: "1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
         NOTE_ENC_ACTIVE_VERSION: "1",
+        // Dead-man switch (feature 008): keep the in-process timer off so e2e is deterministic
+        // (it drives transitions via the fast-forward seam, which runs one tick itself), and
+        // mount the fast-forward test seam.
+        DEADMAN_TICK_DISABLED: "1",
+        DEADMAN_TEST_MODE: "1",
       },
     },
     {

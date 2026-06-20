@@ -432,6 +432,115 @@ paths:
                 $ref: "#/components/schemas/Error"
               example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
 
+  /deadman:
+    get:
+      operationId: getDeadmanStatus
+      summary: Get the caller's own dead-man switch status
+      description: >
+        Returns the authenticated caller's dead-man switch status — the current state
+        (disarmed/active/grace/triggered), the configured interval and grace period, the
+        absolute deadlines, a derived secondsUntilDue countdown, and the most recent
+        events newest-first. A user who has never configured the switch gets a 200 with
+        the default interval/grace, state "disarmed", and null deadlines. Always scoped to
+        the caller — another user's switch is never returned. Requires a valid access token.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: The caller's switch status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeadmanStatus"
+        "401":
+          description: No valid access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
+  /deadman/config:
+    put:
+      operationId: putDeadmanConfig
+      summary: Configure, arm, or disarm the caller's own dead-man switch
+      description: >
+        Sets the caller's check-in interval and grace period (each validated against the
+        shared min/max bounds) and, via `enabled`, arms or disarms the switch. Arming
+        (enabled:true) transitions a disarmed switch to "active" and sets nextCheckinDueAt
+        to now + interval; disarming (enabled:false) transitions to "disarmed" and clears
+        the live deadlines. An out-of-bounds interval or grace is rejected with 400
+        VALIDATION_ERROR and no change. Records an armed/disarmed/config_changed event.
+        Requires a valid access token.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeadmanConfigInput"
+            examples:
+              arm:
+                value: { checkinIntervalSeconds: 604800, gracePeriodSeconds: 172800, enabled: true }
+      responses:
+        "200":
+          description: The configuration was applied; returns the updated status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeadmanStatus"
+        "400":
+          description: Validation failed (interval/grace out of bounds, missing, or non-integer).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "VALIDATION_ERROR", message: "Check-in interval is out of range." }
+        "401":
+          description: No valid access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
+  /deadman/checkin:
+    post:
+      operationId: checkinDeadman
+      summary: Check in ("I'm alive") on the caller's own dead-man switch
+      description: >
+        Resets the caller's switch on an active or grace switch — sets lastCheckinAt to
+        now, moves nextCheckinDueAt to now + interval, returns the state to "active",
+        clears grace bookkeeping, and records a checkin event. Rejected with 409 when the
+        switch is disarmed (no live deadline) or already triggered (cannot un-fire).
+        Requires a valid access token.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: The check-in was recorded; returns the updated status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeadmanStatus"
+        "409":
+          description: The switch is disarmed or already triggered, so a check-in does not apply.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                disarmed:
+                  value: { error: "NOT_ARMED", message: "The switch is not armed." }
+                triggered:
+                  value: { error: "ALREADY_TRIGGERED", message: "The switch has already fired." }
+        "401":
+          description: No valid access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
+
   /test/login:
     post:
       operationId: testLogin
@@ -679,3 +788,111 @@ components:
       required: [outcome]
       properties:
         outcome: { $ref: "#/components/schemas/SendOutcome" }
+    DeadmanState:
+      type: string
+      enum: [disarmed, active, grace, triggered]
+      description: >
+        The current state of a user's dead-man switch. "disarmed" = off; "active" =
+        armed and counting down; "grace" = a deadline was missed and the grace window is
+        running (reminders sent to the user); "triggered" = the grace window also lapsed
+        (in feature 008 this records the event; contact delivery is feature 010).
+    DeadmanEvent:
+      type: object
+      additionalProperties: false
+      required: [id, type, createdAt]
+      description: One append-only audit entry. `detail` never contains note plaintext or tokens.
+      properties:
+        id:
+          type: string
+          description: Server-assigned unique id for this event.
+        type:
+          type: string
+          enum:
+            [armed, disarmed, checkin, entered_grace, reminder_sent, triggered, config_changed]
+          description: The kind of transition or action recorded.
+        detail:
+          type: ["string", "null"]
+          description: Optional JSON detail (never note plaintext or any token value).
+        createdAt:
+          type: string
+          format: date-time
+          description: ISO 8601 UTC timestamp of when the event was recorded.
+    DeadmanEventListResponse:
+      type: object
+      additionalProperties: false
+      required: [events]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/DeadmanEvent"
+          description: The caller's recent events, newest-first (may be empty).
+    DeadmanStatus:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          state,
+          enabled,
+          checkinIntervalSeconds,
+          gracePeriodSeconds,
+          lastCheckinAt,
+          nextCheckinDueAt,
+          graceDeadlineAt,
+          secondsUntilDue,
+          events,
+        ]
+      description: The caller's dead-man switch status, including a live countdown and recent events.
+      properties:
+        state: { $ref: "#/components/schemas/DeadmanState" }
+        enabled:
+          type: boolean
+          description: Whether the switch is currently armed (enabled).
+        checkinIntervalSeconds:
+          type: integer
+          description: The configured check-in interval, in seconds.
+        gracePeriodSeconds:
+          type: integer
+          description: The configured grace period, in seconds.
+        lastCheckinAt:
+          type: ["string", "null"]
+          format: date-time
+          description: ISO 8601 timestamp of the last check-in/arm, or null if never.
+        nextCheckinDueAt:
+          type: ["string", "null"]
+          format: date-time
+          description: Absolute next-check-in deadline, or null when disarmed/triggered.
+        graceDeadlineAt:
+          type: ["string", "null"]
+          format: date-time
+          description: Absolute grace deadline (set in the grace state), or null otherwise.
+        secondsUntilDue:
+          type: ["integer", "null"]
+          description: >
+            Seconds until the relevant deadline (next-check-in while active, grace deadline
+            while in grace), derived from the deadline and the current time; may be negative
+            if a tick has not yet run, or null when there is no live deadline.
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/DeadmanEvent"
+          description: The caller's recent events, newest-first (may be empty).
+    DeadmanConfigInput:
+      type: object
+      additionalProperties: false
+      required: [checkinIntervalSeconds, gracePeriodSeconds, enabled]
+      description: Configure the switch and arm/disarm it.
+      properties:
+        checkinIntervalSeconds:
+          type: integer
+          minimum: 3600
+          maximum: 31536000
+          description: Check-in interval in seconds (1 hour to 365 days).
+        gracePeriodSeconds:
+          type: integer
+          minimum: 3600
+          maximum: 2592000
+          description: Grace period in seconds (1 hour to 30 days).
+        enabled:
+          type: boolean
+          description: true arms the switch (→ active); false disarms it (→ disarmed).

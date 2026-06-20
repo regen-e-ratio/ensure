@@ -27,3 +27,20 @@ export async function resetNote(page: Page): Promise<void> {
 export async function resetContacts(page: Page): Promise<void> {
   await page.request.post("/api/test/reset");
 }
+
+/** Clear the dead-man switch config + events (test-only reset seam) so specs start clean. */
+export async function resetDeadman(page: Page): Promise<void> {
+  await page.request.post("/api/test/reset");
+}
+
+/**
+ * Fast-forward the signed-in user's switch deadlines into the past via the env-gated test
+ * seam (POST /api/test/deadman, mounted only when DEADMAN_TEST_MODE=1), so a spec can force
+ * the miss-deadline → grace path without waiting real time. The page must be signed in.
+ */
+export async function fastForwardDeadman(page: Page): Promise<void> {
+  const res = await page.request.post("/api/test/deadman");
+  if (!res.ok()) {
+    throw new Error(`fast-forward deadman failed with status ${res.status()}`);
+  }
+}

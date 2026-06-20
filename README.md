@@ -44,6 +44,15 @@ The SPA (`:5173`) calls the API under `/api/*` (Vite proxies to the server on `:
   notification through the same generic capability any caller uses and returns an explicit outcome.
   Invalid input → `400 VALIDATION_ERROR` (no delivery); a known-but-disabled channel →
   `400 CHANNEL_NOT_SUPPORTED`; a delivery attempt → `200` with `{ outcome: { status: "sent" | "failed", … } }`.
+- **`/api/deadman`** (protected by `requireAuth`) — the per-user dead-man switch, scoped to the caller.
+  `GET /` returns the switch status (state, configured interval/grace, absolute deadlines, a derived
+  `secondsUntilDue` countdown, and recent events newest-first; a never-configured switch is `disarmed`
+  with defaults and null deadlines). `PUT /config` sets the interval/grace (validated against the shared
+  bounds) and arms (`enabled:true` → `active`, sets `nextCheckinDueAt = now + interval`) or disarms
+  (`enabled:false` → `disarmed`, clears deadlines). `POST /checkin` is the "I'm alive" reset on an
+  `active`/`grace` switch (→ `active`, deadline reset); it is rejected `409` when disarmed/triggered. The
+  SPA surfaces this at the protected **`/deadman`** dashboard (state badge, live countdown, big check-in
+  button, config form with a confirm before the first arm, and a recent-events list).
 
 **Sign-in** uses the server-side **OAuth 2.0 Authorization Code + PKCE** flow with Google
 (`google-auth-library`); the client secret never leaves the server. On success the server mints its
@@ -61,7 +70,7 @@ visitors to `/login`.
 
 ### Data store
 
-`better-sqlite3` (WAL, foreign keys on) at `./data/note.db` (`NOTE_DB_PATH`). Four tables:
+`better-sqlite3` (WAL, foreign keys on) at `./data/note.db` (`NOTE_DB_PATH`). Six tables:
 
 - **`note`** — one row per owner, keyed by `user_id` (PRIMARY KEY → at most one note per user).
   Content is stored as `ciphertext` (BLOB) with the `key_version` that protects it (indexed) plus
@@ -72,6 +81,14 @@ visitors to `/login`.
   (`email` today; the column exists so future types need no migration), the `value` (original case)
   and a derived `value_norm` with `UNIQUE(user_id, type, value_norm)` for case-insensitive
   de-duplication, plus `created_at`. Stored as plaintext (no encryption requirement).
+- **`deadman_config`** — one row per user (PK `user_id`) holding the switch `enabled` flag, the
+  `state` (`disarmed`/`active`/`grace`/`triggered`), the `checkin_interval_seconds`/`grace_period_seconds`,
+  the absolute `last_checkin_at`/`next_checkin_due_at`/`grace_deadline_at` timestamps (so restarts never
+  lose time or fire early), a `reminders_sent` counter, and timestamps. Indexed on
+  `(state, next_checkin_due_at)` so the engine cheaply selects due switches.
+- **`deadman_event`** — an append-only per-user audit log (`id` PK, `user_id` FK, `type`, optional JSON
+  `detail`, `created_at`, indexed on `(user_id, created_at)`). `detail` never holds note plaintext or
+  any token.
 
 ### Encryption at rest
 
@@ -101,12 +118,32 @@ and selected via `EMAIL_PROVIDER` — see `specs/005-notifications-system/email-
 client `/notifications` page (gated behind sign-in) drives its form from `GET /channels` and lets an
 operator send a test notification and see the outcome.
 
+### Liveness engine (dead-man switch)
+
+The per-user dead-man switch lives in `server/src/deadman/`. A **pure `evaluate(config, now)`**
+(`engine.ts`) decides the next transition for one switch (`stay`/`enter_grace`/`remind`/`trigger`/`noop`)
+with no I/O; **`runDeadmanTick(db, deps, now)`** loads due switches (`config-repo.listDue`) and applies
+those decisions through injected `deps` (a notifier closure over the generic `notify()` dispatcher + a
+`Date` clock + a user-email resolver). It is **idempotent and state-guarded**, so repeated ticks never
+double-send a reminder beyond the cap nor re-trigger. On a missed deadline a switch moves `active → grace`,
+**grace reminders are emailed to the user's own account address** (via `notify()`, never a provider
+directly), capped per grace window; if grace also lapses it moves to `triggered` and records the event
+(actual release to contacts is a later feature).
+
+The tick is driven by an **in-process timer** (`driver.ts` → `startDeadmanTimer`, every `DEADMAN_TICK_MS`,
+default 60 s) wired into `server.ts` boot, which also runs a **one-shot boot-recovery tick** so a deadline
+that lapsed while the process was down is evaluated on startup. The timer is **disabled** when
+`DEADMAN_TICK_DISABLED=1` (tests, or when an external scheduler is used). The same single tick is exposed
+as **`npm run deadman:tick --workspace server`** (`cli/deadman-tick.ts`) for an external cron/k8s CronJob.
+
 ### Test seams (never in production)
 
 Mounted only when their env gate is set: `POST /api/test/login` (`AUTH_TEST_MODE=1`) mints a real
-session for a fake user without contacting Google, and `POST /api/test/reset`
-(`NOTE_ALLOW_TEST_RESET=1`) clears the note and contacts. These let Playwright exercise the real middleware and
-cookies while skipping Google's non-automatable consent screen.
+session for a fake user without contacting Google; `POST /api/test/reset`
+(`NOTE_ALLOW_TEST_RESET=1`) clears the note, contacts, and switch state; and `POST /api/test/deadman`
+(`DEADMAN_TEST_MODE=1`) fast-forwards the caller's switch deadlines into the past and runs one tick, so
+e2e can drive miss-deadline → grace without waiting real time. These let Playwright exercise the real
+middleware and cookies while skipping Google's non-automatable consent screen.
 
 ## Run
 
@@ -123,7 +160,15 @@ npm run dev:client     # Vite SPA on  http://localhost:5173    (proxies /api -> 
 Open <http://localhost:5173> → you are redirected to `/login` → **Sign in with Google** → the note
 loads and is editable. It persists across reloads and server restarts; **Sign out** returns you to
 `/login`. The **Notifications** link (or <http://localhost:5173/notifications>) opens the notification
-test page.
+test page; the **Switch** link (or <http://localhost:5173/deadman>) opens the dead-man switch dashboard.
+
+The server runs the **in-process liveness timer** automatically on boot (every `DEADMAN_TICK_MS`,
+default 60 s; recovers any due switch on startup). To drive the engine from an external scheduler
+instead, set `DEADMAN_TICK_DISABLED=1` and run one tick per cron interval:
+
+```bash
+npm run deadman:tick --workspace server   # runs a single liveness tick, then exits
+```
 
 **Local DB helpers** (dev only) — per-table CLIs to inspect/seed the SQLite store, reading the same
 `server/.env` and database as the app: `db:user`, `db:contact`, `db:note` (decrypts via the keyring),
@@ -193,10 +238,20 @@ the backend received, to verify the test-page fields reach the backend. It is **
 applies only to the stub. ⚠️ Enabling it writes recipient and message content to the console, so use
 it only on your local machine — never set it in a shared or production environment.
 
-**Test-only** (optional; never enable in production): `AUTH_TEST_MODE=1` mounts the test-login seam
-and `NOTE_ALLOW_TEST_RESET=1` mounts the reset route. The e2e suite sets these (and dummy Google/JWT
-values **and a test keyring**) itself — see [`playwright.config.ts`](playwright.config.ts) — so you
-do **not** need real Google credentials or keys to run e2e.
+**Optional — dead-man liveness engine** (feature 008; all have safe defaults, none is a secret):
+
+| Variable                | Purpose |
+|-------------------------|---------|
+| `DEADMAN_TICK_MS`       | In-process liveness tick interval in ms (default `60000`). |
+| `DEADMAN_TICK_DISABLED` | Set `1` to turn off the in-process timer (use an external cron driving `npm run deadman:tick --workspace server`, or set by tests so the timer never runs). |
+| `APP_BASE_URL`          | Absolute base URL used to build links placed in emails (default `http://localhost:5173`). |
+| `DEADMAN_TEST_MODE`     | **Test-only** — set `1` to mount `POST /api/test/deadman` (fast-forwards a switch's deadlines for e2e). Never enable in production. |
+
+**Test-only** (optional; never enable in production): `AUTH_TEST_MODE=1` mounts the test-login seam,
+`NOTE_ALLOW_TEST_RESET=1` mounts the reset route, and `DEADMAN_TEST_MODE=1` mounts the deadman
+fast-forward seam. The e2e suite sets these (plus `DEADMAN_TICK_DISABLED=1` so the timer stays off, and
+dummy Google/JWT values **and a test keyring**) itself — see [`playwright.config.ts`](playwright.config.ts)
+— so you do **not** need real Google credentials or keys to run e2e.
 
 ## Tests
 
@@ -215,6 +270,12 @@ PW_CHANNEL=chrome npm run test:e2e
 
 In CI, install the browser normally (`npx playwright install --with-deps chromium`) and run without
 `PW_CHANNEL`.
+
+The dead-man **liveness engine** is exhaustively unit-tested with an injected clock + a spy notifier
+(`server/tests/unit/deadman-*`) and via Supertest contract tests (`server/tests/contract/deadman-*`); the
+dashboard has RTL tests and there is a Playwright spec (`e2e/deadman.spec.ts`). **Every server/e2e test
+sets `DEADMAN_TICK_DISABLED=1`** so the in-process timer never runs and the engine is driven explicitly via
+`runDeadmanTick` (the test helper and `playwright.config.ts` set this for you).
 
 **Merge gates** ([constitution](.specify/memory/constitution.md)): a change merges only when tests
 and e2e pass, `typecheck` passes, and UI changes meet the accessibility baseline (semantic HTML,

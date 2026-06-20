@@ -32,6 +32,7 @@ export function makeTestApp(overrides: Partial<AppOptions> = {}): { app: Express
     auth: TEST_AUTH_CONFIG,
     encryption: TEST_ENCRYPTION_KEYRING,
     enableTestReset: true,
+    enableDeadmanTestMode: true,
     ...overrides,
   });
   return { app, db };

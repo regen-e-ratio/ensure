@@ -57,6 +57,34 @@ export function openDb(path: string): Db {
     );
 
     CREATE INDEX IF NOT EXISTS idx_contact_user_id ON contact(user_id);
+
+    CREATE TABLE IF NOT EXISTS deadman_config (
+      user_id                  TEXT    PRIMARY KEY REFERENCES user(id),
+      enabled                  INTEGER NOT NULL DEFAULT 0,
+      state                    TEXT    NOT NULL DEFAULT 'disarmed',
+      checkin_interval_seconds INTEGER NOT NULL,
+      grace_period_seconds     INTEGER NOT NULL,
+      last_checkin_at          TEXT,
+      next_checkin_due_at      TEXT,
+      grace_deadline_at        TEXT,
+      reminders_sent           INTEGER NOT NULL DEFAULT 0,
+      created_at               TEXT    NOT NULL,
+      updated_at               TEXT    NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_deadman_state_due
+      ON deadman_config(state, next_checkin_due_at);
+
+    CREATE TABLE IF NOT EXISTS deadman_event (
+      id         TEXT NOT NULL PRIMARY KEY,
+      user_id    TEXT NOT NULL REFERENCES user(id),
+      type       TEXT NOT NULL,
+      detail     TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_deadman_event_user
+      ON deadman_event(user_id, created_at);
   `);
   return db;
 }

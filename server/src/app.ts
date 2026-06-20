@@ -10,6 +10,10 @@ import { clearContacts } from "./db/contact-repo";
 import { createNoteRouter } from "./routes/note";
 import { createContactRouter } from "./routes/contact";
 import { createNotificationsRouter } from "./routes/notifications";
+import { createDeadmanRouter } from "./routes/deadman";
+import { clearDeadman } from "./deadman/config-repo";
+import { buildDeadmanDeps } from "./deadman/deps";
+import { createDeadmanFastForwardHandler } from "./test-support/deadman-fast-forward";
 import { createAuthRouter } from "./auth/routes";
 import { createRequireAuth } from "./auth/require-auth";
 import { createTestLoginHandler } from "./test-support/test-login";
@@ -23,6 +27,8 @@ export interface AppOptions {
   emailProvider?: EmailProvider;
   /** Enables a non-contract POST /api/test/reset route for clearing state in e2e runs. Never on in production. */
   enableTestReset?: boolean;
+  /** When true (DEADMAN_TEST_MODE=1), mounts the POST /api/test/deadman fast-forward seam. Never in production. */
+  enableDeadmanTestMode?: boolean;
 }
 
 /**
@@ -52,11 +58,13 @@ export function createApp(db: Db, options: AppOptions): Express {
     requireAuth,
     createNotificationsRouter(options.emailProvider ?? new StubEmailProvider()),
   );
+  app.use("/api/deadman", requireAuth, createDeadmanRouter(db, { now: () => new Date() }));
 
   if (options.enableTestReset) {
     app.post("/api/test/reset", (_req, res) => {
       clearNote(db);
       clearContacts(db);
+      clearDeadman(db);
       res.status(204).end();
     });
   }
@@ -64,6 +72,13 @@ export function createApp(db: Db, options: AppOptions): Express {
   // Test-only seam: mints real session cookies for a fake user without contacting Google.
   if (auth.testMode) {
     app.post("/api/test/login", createTestLoginHandler(db, auth, secure));
+  }
+
+  // Test-only seam: fast-forward the caller's switch deadlines into the past for e2e (FR-020),
+  // then run one tick so the transition is observable without the in-process timer.
+  if (options.enableDeadmanTestMode) {
+    const deadmanDeps = buildDeadmanDeps(db, options.emailProvider ?? new StubEmailProvider());
+    app.post("/api/test/deadman", requireAuth, createDeadmanFastForwardHandler(db, deadmanDeps));
   }
 
   return app;

@@ -3,6 +3,7 @@ import { NoteEditor } from "./components/NoteEditor";
 import { LoginPage } from "./pages/LoginPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { NotificationsTestPage } from "./pages/NotificationsTestPage";
+import { DeadmanDashboardPage } from "./pages/DeadmanDashboardPage";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { useAuth } from "./auth/useAuth";
 
@@ -15,6 +16,9 @@ function NotePage() {
         <h1>Store a Note</h1>
         <div className="app-header__account">
           {user ? <span className="meta">{user.email}</span> : null}
+          <Link className="button button--ghost" to="/deadman">
+            Switch
+          </Link>
           <Link className="button button--ghost" to="/settings">
             Settings
           </Link>
@@ -56,6 +60,14 @@ export function App() {
         element={
           <ProtectedRoute>
             <NotificationsTestPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/deadman"
+        element={
+          <ProtectedRoute>
+            <DeadmanDashboardPage />
           </ProtectedRoute>
         }
       />
