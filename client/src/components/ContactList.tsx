@@ -8,6 +8,7 @@ import {
   verifyContact,
   type Contact,
 } from "../api/contactClient";
+import { EmptyState } from "./EmptyState";
 
 type Status =
   | { kind: "loading" }
@@ -115,9 +116,11 @@ export function ContactList() {
       ) : null}
 
       {isEmptyState ? (
-        <p id="contacts-empty" className="meta">
-          No contacts yet. Add an email address below.
-        </p>
+        <EmptyState
+          id="contacts-empty"
+          title="No contacts yet"
+          hint="Add an email address below, then verify it — only verified contacts can ever receive your note."
+        />
       ) : null}
 
       {contacts.length > 0 ? (

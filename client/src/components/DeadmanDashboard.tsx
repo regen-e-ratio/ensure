@@ -13,6 +13,11 @@ import {
   type DeadmanStatus,
   type DeadmanEvent,
 } from "../api/deadmanClient";
+import { getContacts } from "../api/contactClient";
+import { hasVerifiedContact } from "../onboarding/firstRun";
+import { formatCountdown } from "../onboarding/countdown";
+import { EmptyState } from "./EmptyState";
+import { TestReleaseCta } from "./TestReleaseCta";
 
 type Phase =
   | { kind: "loading" }
@@ -40,19 +45,6 @@ const EVENT_LABEL: Record<DeadmanEvent["type"], string> = {
   config_changed: "Configuration changed",
 };
 
-/** Format a whole-second countdown as "Dd HH:MM:SS" (or "due now" when not positive). */
-function formatCountdown(totalSeconds: number | null): string {
-  if (totalSeconds === null) return "—";
-  if (totalSeconds <= 0) return "Due now";
-  const days = Math.floor(totalSeconds / 86400);
-  const hours = Math.floor((totalSeconds % 86400) / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const hms = `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
-  return days > 0 ? `${days}d ${hms}` : hms;
-}
-
 /** ISO timestamp → locale string, or a dash when null. */
 function formatTime(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString() : "—";
@@ -69,6 +61,8 @@ function formatTime(iso: string | null): string {
 export function DeadmanDashboard() {
   const [status, setStatus] = useState<DeadmanStatus | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
+  // Whether the caller has a verified contact (guards the test-release preview CTA, US2).
+  const [hasVerified, setHasVerified] = useState(false);
 
   // Form fields (seconds), seeded from the loaded status (defaults for a new switch).
   const [interval, setIntervalSeconds] = useState<number>(CHECKIN_INTERVAL_MIN_SECONDS);
@@ -105,6 +99,15 @@ export function DeadmanDashboard() {
         if (!active) return;
         const message = error instanceof ApiError ? error.message : "Could not load your switch.";
         setPhase({ kind: "error", message });
+      });
+    // Load contacts separately so a contacts read failure never blocks the switch dashboard; it
+    // only leaves the preview CTA guarded.
+    getContacts()
+      .then((list) => {
+        if (active) setHasVerified(hasVerifiedContact(list));
+      })
+      .catch(() => {
+        if (active) setHasVerified(false);
       });
     return () => {
       active = false;
@@ -196,14 +199,33 @@ export function DeadmanDashboard() {
             {STATE_LABEL[status?.state ?? "disarmed"]}
           </span>
         </p>
-        {isArmed ? (
-          <p className="deadman-countdown" role="status" aria-live="polite">
-            <span className="meta">
-              {status?.state === "grace" ? "Grace ends in" : "Next check-in due in"}:
-            </span>{" "}
-            <span data-testid="deadman-countdown">{formatCountdown(secondsLeft)}</span>
-          </p>
-        ) : null}
+        {isArmed
+          ? (() => {
+              const cd = formatCountdown(secondsLeft);
+              const label =
+                status?.state === "grace" ? "Grace ends in" : "Next check-in due in";
+              return (
+                <p
+                  className={`deadman-countdown${
+                    cd.urgency === "due" ? " deadman-countdown--due" : ""
+                  }`}
+                  role="status"
+                  aria-live="polite"
+                >
+                  <span className="meta">{label}:</span>{" "}
+                  <span data-testid="deadman-countdown" aria-hidden="true">
+                    {cd.display}
+                    {cd.urgency === "due" ? " (overdue)" : ""}
+                  </span>
+                  {/* Screen-reader-friendly legible phrase (units spelt out), not a colon string. */}
+                  <span className="deadman-countdown__sr">
+                    {label}: {cd.screenReader}
+                    {cd.urgency === "due" ? ". Overdue." : ""}
+                  </span>
+                </p>
+              );
+            })()
+          : null}
       </div>
 
       {/* Big "I'm alive" check-in button — only meaningful while armed. */}
@@ -286,11 +308,21 @@ export function DeadmanDashboard() {
         <p className="status" role="status" aria-live="polite" />
       )}
 
+      {/* Preview the recipient experience (feature 010 test-release), guarded on a verified
+          contact (feature 012 US2). Reachable here outside the onboarding wizard too. */}
+      <section aria-labelledby="deadman-preview-heading">
+        <h3 id="deadman-preview-heading">Preview what your contacts will receive</h3>
+        <TestReleaseCta hasVerifiedContact={hasVerified} />
+      </section>
+
       {/* Recent events (US3). */}
       <section aria-labelledby="deadman-events-heading" className="deadman-events">
         <h3 id="deadman-events-heading">Recent activity</h3>
         {events.length === 0 ? (
-          <p className="meta">No activity yet.</p>
+          <EmptyState
+            title="No activity yet"
+            hint="Arm your switch above to start the clock — your check-ins, reminders, and any release will appear here."
+          />
         ) : (
           <ul className="deadman-event-list">
             {events.map((ev) => (

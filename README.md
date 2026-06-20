@@ -214,6 +214,24 @@ that lapsed while the process was down is evaluated on startup. The timer is **d
 `DEADMAN_TICK_DISABLED=1` (tests, or when an external scheduler is used). The same single tick is exposed
 as **`npm run deadman:tick --workspace server`** (`cli/deadman-tick.ts`) for an external cron/k8s CronJob.
 
+### Onboarding & help (client)
+
+The dead-man dashboard (`/deadman`) carries a thin, **client-only** onboarding/help/polish layer
+(feature 012) — it adds **no** endpoint, table, column, env var, or external service. A **first-run**
+(never-armed) user — derived purely from existing reads (`GET /api/deadman` reporting `disarmed` with
+no prior arm: no `armed` event and a null `last_checkin_at`, plus `GET /api/note` and
+`GET /api/contact`) — is offered a **dismissible, non-blocking guided wizard** (`OnboardingWizard`)
+that walks them through write a note → add & verify a contact → set interval/grace → **arm** (an
+explicit confirm precedes the first arm). Each step drives an **existing** endpoint via the existing
+`NoteEditor`/`ContactList`/`putConfig`; the wizard resumes at the first incomplete step, and its
+dismissal is **session-local** (`sessionStorage`) — it writes no backend state. An always-available
+**"How this works"** explainer (`DeadmanHelp`) describes the model and can relaunch the wizard. Both
+surface feature 010's **"send myself a test release"** CTA (`TestReleaseCta`, guarded on a verified
+contact). The layer renders/persists **no** token, grant, or note plaintext — the only secret is the
+emailed one-time release link. Empty states and the live countdown are polished for legibility and
+screen readers without changing any timing semantics. All dead-man UI (008–012) meets the
+accessibility baseline below.
+
 ### Test seams (never in production)
 
 Mounted only when their env gate is set: `POST /api/test/login` (`AUTH_TEST_MODE=1`) mints a real
@@ -395,6 +413,19 @@ event + token used, second open / expired / unknown / malformed / missing → `n
 (`e2e/checkin-link.spec.ts`: arm → fast-forward → grace → open the captured reminder's check-in link →
 switch back to `active`). No raw check-in token or its hash appears in any log, event, email body beyond
 the single one-time link, or response — only the SHA-256 hash is persisted.
+
+**Onboarding & help (client-only, feature 012)** is covered by component tests for the guided wizard
+(`client/tests/components/OnboardingWizard.firstRun.test.tsx` — offered on a derived first-run, not
+auto-shown once ever-armed; `OnboardingWizard.steps.test.tsx` — step progress/resume + arm-on-confirm;
+`OnboardingWizard.dismiss.test.tsx` — Escape/Skip hides + session-scoped, no backend write;
+`OnboardingWizard.testRelease.test.tsx` — the guarded preview CTA, accessible confirmation/error, and
+**no token/grant/plaintext** rendered), the help explainer (`DeadmanHelp.test.tsx`), the legible
+countdown formatter (`DeadmanDashboard.countdown.test.tsx`), and the empty state (`EmptyState.test.tsx`),
+plus a first-run Playwright flow (`e2e/onboarding.spec.ts`: wizard offered → note → add + verify a
+contact → set interval/grace → confirm arm → switch active + wizard steps aside; plus the dismiss
+path), which also keeps `DEADMAN_TICK_DISABLED=1` and reuses the `AUTH_TEST_MODE`/`DEADMAN_TEST_MODE`
+seams. This feature adds no server code and no contract change; `contracts/openapi.yaml` and
+`shared/src/api.ts` are unchanged.
 
 **Merge gates** ([constitution](.specify/memory/constitution.md)): a change merges only when tests
 and e2e pass, `typecheck` passes, and UI changes meet the accessibility baseline (semantic HTML,
