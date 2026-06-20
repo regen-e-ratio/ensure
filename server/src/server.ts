@@ -49,6 +49,7 @@ const app = createApp(db, {
   auth,
   encryption,
   emailProvider,
+  appBaseUrl: deadman.appBaseUrl,
   enableTestReset: process.env.NOTE_ALLOW_TEST_RESET === "1",
   enableDeadmanTestMode: deadman.testMode,
 });

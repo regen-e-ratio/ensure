@@ -34,7 +34,14 @@ describe("GET /api/contact contract (US1)", () => {
     expect(res.status).toBe(200);
     expect(res.body.contacts).toHaveLength(1);
     const [contact] = res.body.contacts;
-    expect(Object.keys(contact).sort()).toEqual(["createdAt", "id", "type", "value"]);
+    expect(Object.keys(contact).sort()).toEqual([
+      "createdAt",
+      "id",
+      "type",
+      "value",
+      "verified",
+      "verifiedAt",
+    ]);
     expect(contact.type).toBe("email");
     expect(typeof contact.id).toBe("string");
     expect(contact.value).toBe("alice@example.com");

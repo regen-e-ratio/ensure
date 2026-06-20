@@ -39,6 +39,26 @@ The SPA (`:5173`) calls the API under `/api/*` (Vite proxies to the server on `:
   case-insensitively); `DELETE /:id` removes one (idempotent). Adds are rejected for a malformed/too-long
   email (`400`), a duplicate (`409 DUPLICATE_CONTACT`), or exceeding `CONTACT_LIMIT` (`409
   CONTACT_LIMIT_REACHED`). The SPA surfaces this at the protected **`/settings`** page.
+  Each contact also carries **verification state** (`verified_at`, `verification_token_hash`,
+  `verification_expires_at`); the serialized contact exposes a derived `verified` boolean and a
+  nullable `verifiedAt` (the hash/expiry stay internal). A contact must prove control of its address
+  before it can ever receive a release (prerequisite for the future release feature) — every
+  pre-existing contact is **unverified by default** (null `verified_at`).
+- **`POST /api/contact/{id}/verify`** (protected by `requireAuth`, scoped to the caller) — mints a
+  high-entropy token, stores **only its SHA-256 hash** plus a future expiry
+  (`CONTACT_VERIFICATION_TTL_SECONDS`, 24 h) on the owned contact, and sends a verification email
+  through the generic `notify()` dispatcher whose body carries a single `APP_BASE_URL` link
+  (`/contact-verified?token=…`) with the raw token shown once. A non-owned/absent id is `404` (no
+  email); resending refreshes the token (overwriting the prior hash/expiry, invalidating any earlier
+  link). The token mint/hash mirrors the session-token pattern (`server/src/contacts/`); the raw token
+  is never stored, logged, or serialized.
+- **`GET /api/contact/verify?token=…`** — **PUBLIC** (no session; mounted *before* `requireAuth`,
+  token-only authority). Hashes the token, looks the contact up by hash, enforces an inclusive expiry
+  boundary and single-use, sets `verified_at`, and returns `{ status: "verified" | "already_verified" |
+  "invalid_or_expired" }`. Expired/used/unknown/malformed tokens all return the generic
+  `invalid_or_expired` result (fail-closed, discloses no contact/owner existence). The SPA renders the
+  outcome on the public **`/contact-verified`** page; the contact list shows a text-labelled
+  verified/unverified badge and a "Send verification"/"Resend" action.
 - **`/api/notifications`** (protected by `requireAuth`) — the generic notification system.
   `GET /channels` lists each channel with its availability and input fields; `POST /test` sends one
   notification through the same generic capability any caller uses and returns an explicit outcome.
@@ -80,7 +100,11 @@ visitors to `/login`.
 - **`contact`** — a user's contacts (`id` PK, `user_id` FK, indexed). Carries an explicit `type`
   (`email` today; the column exists so future types need no migration), the `value` (original case)
   and a derived `value_norm` with `UNIQUE(user_id, type, value_norm)` for case-insensitive
-  de-duplication, plus `created_at`. Stored as plaintext (no encryption requirement).
+  de-duplication, plus `created_at`. Stored as plaintext (no encryption requirement). Also holds
+  per-contact **verification** columns — `verified_at` (null = unverified), `verification_token_hash`
+  (SHA-256 of the current token; the raw token is never stored), and `verification_expires_at` — added
+  nullably (no backfill) with a partial `idx_contact_verification_hash` index backing the public
+  token lookup.
 - **`deadman_config`** — one row per user (PK `user_id`) holding the switch `enabled` flag, the
   `state` (`disarmed`/`active`/`grace`/`triggered`), the `checkin_interval_seconds`/`grace_period_seconds`,
   the absolute `last_checkin_at`/`next_checkin_due_at`/`grace_deadline_at` timestamps (so restarts never
@@ -140,7 +164,9 @@ as **`npm run deadman:tick --workspace server`** (`cli/deadman-tick.ts`) for an 
 
 Mounted only when their env gate is set: `POST /api/test/login` (`AUTH_TEST_MODE=1`) mints a real
 session for a fake user without contacting Google; `POST /api/test/reset`
-(`NOTE_ALLOW_TEST_RESET=1`) clears the note, contacts, and switch state; and `POST /api/test/deadman`
+(`NOTE_ALLOW_TEST_RESET=1`) clears the note, contacts, and switch state, and (same gate) mounts
+`GET /api/test/emails` so e2e can read back the verification link the server emailed; and
+`POST /api/test/deadman`
 (`DEADMAN_TEST_MODE=1`) fast-forwards the caller's switch deadlines into the past and runs one tick, so
 e2e can drive miss-deadline → grace without waiting real time. These let Playwright exercise the real
 middleware and cookies while skipping Google's non-automatable consent screen.
@@ -276,6 +302,17 @@ The dead-man **liveness engine** is exhaustively unit-tested with an injected cl
 dashboard has RTL tests and there is a Playwright spec (`e2e/deadman.spec.ts`). **Every server/e2e test
 sets `DEADMAN_TICK_DISABLED=1`** so the in-process timer never runs and the engine is driven explicitly via
 `runDeadmanTick` (the test helper and `playwright.config.ts` set this for you).
+
+**Contact verification** is covered at every layer: token helper units
+(`server/tests/unit/contact-verification-token.test.ts`), repo units for the verification helpers,
+`toContact`, idempotent `markVerified`, and single-use/resend-supersede
+(`server/tests/unit/contact-repo.test.ts`), Supertest contract tests for the authed send
+(`server/tests/contract/contact-verify-send.test.ts`) and the public, fail-closed verify
+(`server/tests/contract/contact-verify-public.test.ts`), client component/page tests
+(`client/tests/components/ContactList.verify.test.tsx`, `client/tests/pages/ContactVerifiedPage.test.tsx`),
+and an end-to-end round-trip (`e2e/contact-verification.spec.ts`: add → send → open the captured link →
+verified badge, asserting the raw token never leaks). The raw verification token appears in no test
+fixture, log, event, or serialized contact — only its SHA-256 hash is persisted.
 
 **Merge gates** ([constitution](.specify/memory/constitution.md)): a change merges only when tests
 and e2e pass, `typecheck` passes, and UI changes meet the accessibility baseline (semantic HTML,

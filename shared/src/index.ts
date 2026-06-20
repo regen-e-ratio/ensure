@@ -9,5 +9,6 @@ export {
   DEADMAN_DEFAULT_INTERVAL_SECONDS,
   DEADMAN_DEFAULT_GRACE_SECONDS,
   DEADMAN_MAX_GRACE_REMINDERS,
+  CONTACT_VERIFICATION_TTL_SECONDS,
 } from "./constants";
 export type { components, paths } from "./api";

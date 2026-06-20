@@ -343,6 +343,89 @@ paths:
       responses:
         "204":
           description: The contact was removed, or no matching contact existed (idempotent).
+  /contact/verify:
+    get:
+      operationId: confirmContactVerification
+      summary: Confirm a contact verification link (public, token-only)
+      description: >
+        PUBLIC (no session) endpoint that confirms control of a contact's address from the
+        link emailed by POST /contact/{id}/verify. Authority comes entirely from possession
+        of the unguessable token: the server hashes the supplied token, looks the contact up
+        by that hash, and uses no caller-supplied contact id or session. On a valid, unexpired,
+        unused token it sets the contact's `verified_at` and returns `verified` (or
+        `already_verified` if it was already confirmed). A missing, malformed, unknown, expired,
+        or already-used token yields a generic `invalid_or_expired` result that discloses
+        nothing about whether any contact or owner exists (fail-closed). The raw token is never
+        logged or echoed.
+      parameters:
+        - in: query
+          name: token
+          required: false
+          schema: { type: string }
+          description: The one-time verification token carried by the emailed link.
+      responses:
+        "200":
+          description: The verification outcome (success, already-verified, or invalid/expired).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContactVerifyResult"
+              examples:
+                verified:
+                  value: { status: "verified" }
+                alreadyVerified:
+                  value: { status: "already_verified" }
+                invalid:
+                  value: { status: "invalid_or_expired" }
+  /contact/{id}/verify:
+    post:
+      operationId: sendContactVerification
+      summary: Send (or resend) a verification email to one of the caller's contacts
+      description: >
+        Mints a high-entropy token, stores only its SHA-256 hash plus a future expiry on the
+        owned contact, and sends a verification email through the generic notify() dispatcher
+        (email channel) whose body carries a single APP_BASE_URL link with the raw token shown
+        once. Scoped to the caller (`req.user.id`): a contact id that is not the caller's own
+        is treated as not-found (404) and no email is sent. Resending is allowed and refreshes
+        the token (overwriting the prior hash + expiry), invalidating any earlier link. Requires
+        a valid access token.
+      security:
+        - sessionCookie: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+          description: The id of the caller's contact to verify.
+      responses:
+        "200":
+          description: The verification email was dispatched.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContactVerifySendResponse"
+              example: { sent: true }
+        "401":
+          description: No valid access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "UNAUTHORIZED", message: "Sign in to continue." }
+        "404":
+          description: No such contact for the caller (no email sent).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "NOT_FOUND", message: "Contact not found." }
+        "502":
+          description: The verification email could not be dispatched; the contact stays unverified.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: "EMAIL_SEND_FAILED", message: "Could not send the verification email. Please try again." }
   /notifications/channels:
     get:
       operationId: getNotificationChannels
@@ -635,7 +718,7 @@ components:
     Contact:
       type: object
       additionalProperties: false
-      required: [id, type, value, createdAt]
+      required: [id, type, value, createdAt, verified, verifiedAt]
       properties:
         id:
           type: string
@@ -654,6 +737,19 @@ components:
           type: string
           format: date-time
           description: ISO 8601 UTC timestamp of when the contact was added.
+        verified:
+          type: boolean
+          description: >
+            Whether the contact has proven control of its address (feature 009). Derived
+            from `verified_at != null`; every pre-existing contact is unverified by default.
+            Only verified contacts ever receive a release (feature 010).
+        verifiedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            ISO 8601 UTC timestamp of when the contact was verified, or null if unverified.
+            The internal verification token hash and expiry are never serialized.
     ContactInput:
       type: object
       additionalProperties: false
@@ -678,6 +774,29 @@ components:
           items:
             $ref: "#/components/schemas/Contact"
           description: The caller's contacts, ordered by creation time (may be empty).
+    ContactVerifySendResponse:
+      type: object
+      additionalProperties: false
+      required: [sent]
+      properties:
+        sent:
+          type: boolean
+          description: >
+            True when the verification email was dispatched through the generic notify()
+            dispatcher to the contact's address (feature 009).
+    ContactVerifyResult:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [verified, already_verified, invalid_or_expired]
+          description: >
+            Outcome of opening a public verification link. `verified` — the contact was just
+            confirmed; `already_verified` — a valid link for an already-confirmed contact
+            (idempotent); `invalid_or_expired` — the token was missing, malformed, unknown,
+            expired, or already used (fail-closed; discloses no contact/owner existence).
     Error:
       type: object
       additionalProperties: false

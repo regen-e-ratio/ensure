@@ -19,7 +19,16 @@ describe("POST /api/contact contract (US2)", () => {
       .set("Cookie", cookies)
       .send({ type: "email", value: "Alice@Example.com" });
     expect(res.status).toBe(201);
-    expect(Object.keys(res.body).sort()).toEqual(["createdAt", "id", "type", "value"]);
+    expect(Object.keys(res.body).sort()).toEqual([
+      "createdAt",
+      "id",
+      "type",
+      "value",
+      "verified",
+      "verifiedAt",
+    ]);
+    expect(res.body.verified).toBe(false);
+    expect(res.body.verifiedAt).toBeNull();
     expect(res.body.value).toBe("Alice@Example.com");
     expect(res.body.id).toBeTruthy();
   });

@@ -9,6 +9,7 @@ import { clearNote } from "./db/note-repo";
 import { clearContacts } from "./db/contact-repo";
 import { createNoteRouter } from "./routes/note";
 import { createContactRouter } from "./routes/contact";
+import { createContactVerifyRouter } from "./routes/contact-verify";
 import { createNotificationsRouter } from "./routes/notifications";
 import { createDeadmanRouter } from "./routes/deadman";
 import { clearDeadman } from "./deadman/config-repo";
@@ -17,6 +18,7 @@ import { createDeadmanFastForwardHandler } from "./test-support/deadman-fast-for
 import { createAuthRouter } from "./auth/routes";
 import { createRequireAuth } from "./auth/require-auth";
 import { createTestLoginHandler } from "./test-support/test-login";
+import { CapturingEmailProvider, createCapturedEmailsHandler } from "./test-support/capturing-email";
 
 export interface AppOptions {
   /** Auth configuration (Google + JWT + test-mode flag). Required — the app is gated behind SSO. */
@@ -25,6 +27,11 @@ export interface AppOptions {
   encryption: Keyring;
   /** Email provider for the notification system. Defaults to the in-process stub (no network send). */
   emailProvider?: EmailProvider;
+  /**
+   * Absolute base URL used to build links placed in emails (feature 008's APP_BASE_URL).
+   * Used by the contact-verification send handler (feature 009). Defaults to the dev SPA origin.
+   */
+  appBaseUrl?: string;
   /** Enables a non-contract POST /api/test/reset route for clearing state in e2e runs. Never on in production. */
   enableTestReset?: boolean;
   /** When true (DEADMAN_TEST_MODE=1), mounts the POST /api/test/deadman fast-forward seam. Never in production. */
@@ -52,12 +59,20 @@ export function createApp(db: Db, options: AppOptions): Express {
 
   const requireAuth = createRequireAuth(auth.jwtSecret);
   app.use("/api/note", requireAuth, createNoteRouter(db, options.encryption));
-  app.use("/api/contact", requireAuth, createContactRouter(db));
-  app.use(
-    "/api/notifications",
-    requireAuth,
-    createNotificationsRouter(options.emailProvider ?? new StubEmailProvider()),
-  );
+
+  // In test/e2e runs (behind the existing test-reset gate) wrap the provider so e2e can read
+  // back the verification link the server emailed. Never wrapped in production.
+  const baseEmailProvider = options.emailProvider ?? new StubEmailProvider();
+  const capturingProvider = options.enableTestReset
+    ? new CapturingEmailProvider(baseEmailProvider)
+    : null;
+  const emailProvider: EmailProvider = capturingProvider ?? baseEmailProvider;
+  const appBaseUrl = options.appBaseUrl ?? "http://localhost:5173";
+  // PUBLIC verify route — token-only authority — mounted BEFORE the requireAuth-gated
+  // /api/contact so an unauthenticated recipient can confirm their address (feature 009).
+  app.use("/api/contact/verify", createContactVerifyRouter(db));
+  app.use("/api/contact", requireAuth, createContactRouter(db, { appBaseUrl, emailProvider }));
+  app.use("/api/notifications", requireAuth, createNotificationsRouter(emailProvider));
   app.use("/api/deadman", requireAuth, createDeadmanRouter(db, { now: () => new Date() }));
 
   if (options.enableTestReset) {
@@ -65,8 +80,12 @@ export function createApp(db: Db, options: AppOptions): Express {
       clearNote(db);
       clearContacts(db);
       clearDeadman(db);
+      if (capturingProvider) capturingProvider.captured.length = 0;
       res.status(204).end();
     });
+    if (capturingProvider) {
+      app.get("/api/test/emails", createCapturedEmailsHandler(capturingProvider));
+    }
   }
 
   // Test-only seam: mints real session cookies for a fake user without contacting Google.
@@ -77,7 +96,7 @@ export function createApp(db: Db, options: AppOptions): Express {
   // Test-only seam: fast-forward the caller's switch deadlines into the past for e2e (FR-020),
   // then run one tick so the transition is observable without the in-process timer.
   if (options.enableDeadmanTestMode) {
-    const deadmanDeps = buildDeadmanDeps(db, options.emailProvider ?? new StubEmailProvider());
+    const deadmanDeps = buildDeadmanDeps(db, emailProvider);
     app.post("/api/test/deadman", requireAuth, createDeadmanFastForwardHandler(db, deadmanDeps));
   }
 
