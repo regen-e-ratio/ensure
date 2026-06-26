@@ -3,7 +3,7 @@ import type { EmailProvider } from "../notifications/channels/email/provider";
 import { buildRegistry } from "../notifications/registry";
 import { notify } from "../notifications/notifier";
 import { getUser } from "../db/user-repo";
-import { listVerifiedContacts } from "../db/contact-repo";
+import { listContacts } from "../db/contact-repo";
 import { buildReleaseEmail } from "./release-email";
 import { buildCheckinLink } from "./checkin-link";
 import { mintToken, hashToken } from "./tokens";
@@ -18,7 +18,7 @@ const DEFAULT_APP_BASE_URL = "http://localhost:5173";
  * Build the engine's injected {@link Deps} from the real collaborators: a notifier closure over
  * the generic `notify(buildRegistry(emailProvider), …)` dispatcher (never a provider directly), a
  * `Date` clock, a `userEmailFor` resolver reading the user's account email, and (feature 010) the
- * `release` capability — a verified-contact snapshot lister plus a per-grant release-email sender
+ * `release` capability — a contact snapshot lister plus a per-grant release-email sender
  * that emails one tokenized `${appBaseUrl}/r/<token>` link via the same dispatcher and returns the
  * provider message id (throwing on failure). Shared by the boot path (`server.ts`), the
  * `deadman:tick` CLI, and the fast-forward seam so all drive the engine identically. Email
@@ -55,8 +55,8 @@ export function buildDeadmanDeps(
       });
     },
     release: {
-      listVerifiedContacts: (userId: string): ReleaseRecipient[] =>
-        listVerifiedContacts(db, userId).map((c) => ({ contactId: c.id, address: c.value })),
+      listContacts: (userId: string): ReleaseRecipient[] =>
+        listContacts(db, userId).map((c) => ({ contactId: c.id, address: c.value })),
       sendReleaseEmail: async (recipient: string, token: string): Promise<string | null> => {
         const email = buildReleaseEmail(appBaseUrl, token, recipient);
         const result = await notify(registry, {

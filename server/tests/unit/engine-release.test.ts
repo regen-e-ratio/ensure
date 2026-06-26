@@ -8,7 +8,7 @@ import {
 } from "../../src/deadman/engine";
 import { getConfig, upsertConfig } from "../../src/deadman/config-repo";
 import { listEvents } from "../../src/deadman/event-repo";
-import { addContact, markVerified } from "../../src/db/contact-repo";
+import { addContact } from "../../src/db/contact-repo";
 import { createRelease } from "../../src/db/release-repo";
 
 let db: Db;
@@ -21,10 +21,10 @@ function seedUser(id: string): void {
   ).run(id, `${id}@example.com`, null, "2026-06-20T00:00:00.000Z", "2026-06-20T00:00:00.000Z");
 }
 
-function listVerified(userId: string): ReleaseRecipient[] {
-  // mirror the real resolver: only verified contacts.
+function listAllContacts(userId: string): ReleaseRecipient[] {
+  // mirror the real resolver: every contact is a recipient.
   const rows = db
-    .prepare("SELECT id, value FROM contact WHERE user_id = ? AND verified_at IS NOT NULL")
+    .prepare("SELECT id, value FROM contact WHERE user_id = ?")
     .all(userId) as { id: string; value: string }[];
   return rows.map((r) => ({ contactId: r.id, address: r.value }));
 }
@@ -37,7 +37,7 @@ function makeDeps(now: Date, opts: { sendFails?: (addr: string) => boolean } = {
       reminders.push(message);
     }),
     release: {
-      listVerifiedContacts: listVerified,
+      listContacts: listAllContacts,
       sendReleaseEmail: vi.fn(async (recipient: string, token: string) => {
         if (opts.sendFails?.(recipient)) throw new Error("provider down");
         releaseEmails.push({ recipient, token });
@@ -68,10 +68,8 @@ beforeEach(() => {
 });
 
 describe("runDeadmanTick — trigger creates a release (US1, feature 010)", () => {
-  it("snapshots verified contacts only, mints one grant each, emails a tokenized link", async () => {
-    const verified = addContact(db, "u1", "email", "verified@example.com");
-    markVerified(db, verified.id, NOW);
-    addContact(db, "u1", "email", "unverified@example.com"); // gets no grant
+  it("snapshots every contact, mints one grant each, emails a tokenized link", async () => {
+    const contact = addContact(db, "u1", "email", "friend@example.com");
 
     await armAndTrigger("u1", new Date("2026-07-05T00:00:00.000Z"));
 
@@ -84,19 +82,19 @@ describe("runDeadmanTick — trigger creates a release (US1, feature 010)", () =
     expect(releases).toHaveLength(1);
     expect(releases[0]!.trigger).toBe("schedule");
 
-    // Exactly one grant — the verified contact only.
+    // One grant — the contact.
     const grants = db.prepare("SELECT * FROM release_grant").all() as {
       contact_id: string;
       email_status: string;
       token_hash: string;
     }[];
     expect(grants).toHaveLength(1);
-    expect(grants[0]!.contact_id).toBe(verified.id);
+    expect(grants[0]!.contact_id).toBe(contact.id);
     expect(grants[0]!.email_status).toBe("sent");
 
-    // The email carried a tokenized link to the verified address.
+    // The email carried a tokenized link to the contact's address.
     expect(releaseEmails).toHaveLength(1);
-    expect(releaseEmails[0]!.recipient).toBe("verified@example.com");
+    expect(releaseEmails[0]!.recipient).toBe("friend@example.com");
     expect(releaseEmails[0]!.token.length).toBeGreaterThan(0);
 
     // The raw token is never persisted — only its hash.
@@ -111,9 +109,8 @@ describe("runDeadmanTick — trigger creates a release (US1, feature 010)", () =
     expect(released.detail).not.toContain(releaseEmails[0]!.token);
   });
 
-  it("a verified contact with no token leak: no event/grant row contains the raw token", async () => {
-    const verified = addContact(db, "u1", "email", "v@example.com");
-    markVerified(db, verified.id, NOW);
+  it("no token leak: no event/grant row contains the raw token", async () => {
+    addContact(db, "u1", "email", "v@example.com");
     await armAndTrigger("u1", new Date("2026-07-05T00:00:00.000Z"));
 
     const token = releaseEmails[0]!.token;
@@ -126,8 +123,7 @@ describe("runDeadmanTick — trigger creates a release (US1, feature 010)", () =
 
 describe("runDeadmanTick — idempotent release (US1, FR-005)", () => {
   it("a second tick on a triggered switch creates no second release or grants", async () => {
-    const verified = addContact(db, "u1", "email", "v@example.com");
-    markVerified(db, verified.id, NOW);
+    addContact(db, "u1", "email", "v@example.com");
     await armAndTrigger("u1", new Date("2026-07-05T00:00:00.000Z"));
 
     const grantsBefore = (db.prepare("SELECT COUNT(*) AS n FROM release_grant").get() as { n: number }).n;
@@ -146,8 +142,6 @@ describe("runDeadmanTick — idempotent release (US1, FR-005)", () => {
   it("a per-grant email failure is recorded 'failed' without aborting the batch", async () => {
     const a = addContact(db, "u1", "email", "a@example.com");
     const b = addContact(db, "u1", "email", "b@example.com");
-    markVerified(db, a.id, NOW);
-    markVerified(db, b.id, NOW);
 
     upsertConfig(db, "u1", ARM, NOW);
     await runDeadmanTick(db, makeDeps(new Date("2026-06-28T00:00:00.000Z")), new Date("2026-06-28T00:00:00.000Z"));
@@ -187,8 +181,7 @@ describe("release uniqueness — durable cross-process idempotency (FR-005, SC-0
   });
 
   it("a tick that loses the claim race transitions to triggered without double-delivering", async () => {
-    const verified = addContact(db, "u1", "email", "v@example.com");
-    markVerified(db, verified.id, NOW);
+    addContact(db, "u1", "email", "v@example.com");
 
     upsertConfig(db, "u1", ARM, NOW);
     await runDeadmanTick(db, makeDeps(new Date("2026-06-28T00:00:00.000Z")), new Date("2026-06-28T00:00:00.000Z"));
@@ -196,13 +189,13 @@ describe("release uniqueness — durable cross-process idempotency (FR-005, SC-0
     releaseEmails = [];
 
     // Simulate a concurrent process winning the claim between this tick's fast-path check and its
-    // own INSERT: the first listVerifiedContacts call inserts the competing 'schedule' release, so
+    // own INSERT: the first listContacts call inserts the competing 'schedule' release, so
     // this tick's createRelease then loses the partial-UNIQUE race.
     const triggerNow = new Date("2026-07-05T00:00:00.000Z");
     const racingDeps = makeDeps(triggerNow);
-    const realList = racingDeps.release!.listVerifiedContacts;
+    const realList = racingDeps.release!.listContacts;
     let raced = false;
-    racingDeps.release!.listVerifiedContacts = (userId: string) => {
+    racingDeps.release!.listContacts = (userId: string) => {
       if (!raced) {
         raced = true;
         createRelease(db, userId, "schedule", triggerNow.toISOString());

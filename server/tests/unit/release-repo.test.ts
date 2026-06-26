@@ -8,7 +8,7 @@ import {
   setGrantEmailStatus,
   hasReleaseForCurrentCycle,
 } from "../../src/db/release-repo";
-import { addContact, markVerified } from "../../src/db/contact-repo";
+import { addContact } from "../../src/db/contact-repo";
 import { mintToken, hashToken } from "../../src/deadman/tokens";
 
 let db: Db;
@@ -136,10 +136,9 @@ describe("release-repo (feature 010)", () => {
     expect(hasReleaseForCurrentCycle(db, "owner")).toBe(false);
   });
 
-  it("listVerifiedContacts feeds createGrants with verified-only recipients", () => {
-    // sanity: a verified contact can be a grant recipient.
+  it("listContacts feeds createGrants with the owner's recipients", () => {
+    // sanity: a contact can be a grant recipient.
     const c1 = addContact(db, "owner", "email", "v@example.com");
-    markVerified(db, c1.id, NOW);
     const release = createRelease(db, "owner", "schedule", NOW);
     const token = mintToken();
     const ids = createGrants(db, release.id, "owner", [{ contactId: c1.id, tokenHash: hashToken(token) }], EXPIRES, NOW);

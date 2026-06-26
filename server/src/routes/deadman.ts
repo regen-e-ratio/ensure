@@ -140,16 +140,16 @@ export function createDeadmanRouter(db: Db, deps: DeadmanRouterDeps): Router {
   });
 
   // Feature 010 (US3): preview the recipient experience. Mints a one-time grant to the caller's
-  // OWN verified address(es), creates a `manual_test` release, and emails each a tokenized link
-  // WITHOUT changing the switch state. 409 when the caller has no verified contact (no email).
+  // OWN address(es), creates a `manual_test` release, and emails each a tokenized link WITHOUT
+  // changing the switch state. 409 when the caller has no contact (no email).
   router.post("/test-release", async (req, res) => {
     const userId = req.user!.id;
     const nowIso = deps.now().toISOString();
     const grants = await runTestRelease(db, deps.release, userId, nowIso);
     if (grants === 0) {
       res.status(409).json({
-        error: "NO_VERIFIED_CONTACT",
-        message: "Verify a contact before sending a test release.",
+        error: "NO_CONTACT",
+        message: "Add a contact before sending a test release.",
       });
       return;
     }

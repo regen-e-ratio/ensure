@@ -7,7 +7,7 @@ import { createApp } from "../../src/app";
 import { openDb } from "../../src/db/index";
 import { createKeyring } from "../../src/crypto/keyring";
 import { upsertNote } from "../../src/db/note-repo";
-import { addContact, markVerified } from "../../src/db/contact-repo";
+import { addContact } from "../../src/db/contact-repo";
 import { createRelease, createGrants } from "../../src/db/release-repo";
 import { mintToken, hashToken } from "../../src/deadman/tokens";
 import { TEST_AUTH_CONFIG } from "../helpers/auth";
@@ -35,12 +35,11 @@ const NOW = "2026-06-20T00:00:00.000Z";
 const FUTURE = "2030-01-01T00:00:00.000Z";
 const PAST = "2000-01-01T00:00:00.000Z";
 
-/** Create a grant for `owner` (with note + verified contact) and return the raw token. */
+/** Create a grant for `owner` (with note + contact) and return the raw token. */
 function makeGrant(db: Db, owner: string, expiresAt: string, keyring = KEYRING): string {
   seedUser(db, owner);
   upsertNote(db, owner, "the secret note", keyring, NOW);
   const contact = addContact(db, owner, "email", "friend@example.com");
-  markVerified(db, contact.id, NOW);
   const release = createRelease(db, owner, "schedule", NOW);
   const token = mintToken();
   createGrants(db, release.id, owner, [{ contactId: contact.id, tokenHash: hashToken(token) }], expiresAt, NOW);

@@ -29,7 +29,7 @@ import {
   isWizardDismissed,
   dismissWizard,
   nextIncompleteStep,
-  hasVerifiedContact,
+  hasContact,
   WIZARD_STEPS,
   type WizardStep,
 } from "../onboarding/firstRun";
@@ -40,7 +40,7 @@ import { formatDuration } from "../onboarding/formatDuration";
  *
  * It reads the existing status (`GET /api/deadman`), note (`GET /api/note`), and contacts
  * (`GET /api/contact`) to derive whether to OFFER itself (first-run / never-armed) and which step to
- * RESUME at, then walks the user through: write a note → add & verify a contact → set interval/grace
+ * RESUME at, then walks the user through: write a note → add a contact → set interval/grace
  * & arm. Each step drives an EXISTING endpoint via the existing `NoteEditor`/`ContactList`/`putConfig`
  * — no new backend. Dismissal (Escape or the labelled control) is session-local (`sessionStorage`) and
  * writes NO backend state. It renders no token, grant, or note plaintext in its own chrome (FR-017).
@@ -119,7 +119,7 @@ export function OnboardingWizard({ forceOpen = false, onClose }: OnboardingWizar
   if (load.kind !== "ready") return null;
 
   const { status, hasNote, contacts } = load;
-  const hasVerified = hasVerifiedContact(contacts);
+  const hasAnyContact = hasContact(contacts);
   const isArmed = armed || status.enabled === true || status.state === "active";
 
   // Offer the wizard on first-run, unless dismissed this session — or whenever force-opened (US3).
@@ -128,14 +128,14 @@ export function OnboardingWizard({ forceOpen = false, onClose }: OnboardingWizar
   visibleRef.current = visible;
   if (!visible) return null;
 
-  const step: WizardStep = nextIncompleteStep(hasNote, hasVerified, isArmed);
+  const step: WizardStep = nextIncompleteStep(hasNote, hasAnyContact, isArmed);
   const isComplete = step === "done" || armed;
 
   async function handleArm(event: FormEvent) {
     event.preventDefault();
     const ok = window.confirm(
       "Arm your dead-man switch? If you do not check in before each deadline, your switch will " +
-        "eventually release your note to your verified contacts. You can disarm it at any time.",
+        "eventually release your note to your contacts. You can disarm it at any time.",
     );
     if (!ok) return;
     setArmPhase({ kind: "working" });
@@ -156,7 +156,7 @@ export function OnboardingWizard({ forceOpen = false, onClose }: OnboardingWizar
 
   const stepLabels: Record<WizardStep, string> = {
     "write-note": "Write your note",
-    "verify-contact": "Add & verify a contact",
+    "add-contact": "Add a contact",
     "set-interval-grace": "Set your schedule & arm",
     done: "Done",
   };
@@ -216,20 +216,20 @@ export function OnboardingWizard({ forceOpen = false, onClose }: OnboardingWizar
           </>
         ) : null}
 
-        {step === "verify-contact" ? (
+        {step === "add-contact" ? (
           <>
-            <h3>Step 2 — Add &amp; verify a contact</h3>
+            <h3>Step 2 — Add a contact</h3>
             <p className="meta">
-              Add at least one email contact and verify it. Only verified contacts can ever receive
-              your note.
+              Add at least one email contact. Your contacts receive your note if your switch ever
+              fires.
             </p>
             <ContactList />
             {/* US2: the guarded preview CTA is reachable here too (disabled until a contact is
-                verified, explaining the prerequisite) and on the schedule step. */}
-            <TestReleaseCta hasVerifiedContact={hasVerified} />
+                added, explaining the prerequisite) and on the schedule step. */}
+            <TestReleaseCta hasContact={hasAnyContact} />
             <div className="wizard__actions">
               <button type="button" className="button" onClick={refresh}>
-                I&apos;ve verified a contact — continue
+                I&apos;ve added a contact — continue
               </button>
             </div>
           </>
@@ -276,7 +276,7 @@ export function OnboardingWizard({ forceOpen = false, onClose }: OnboardingWizar
             </p>
 
             {/* US2: preview the recipient experience before arming. */}
-            <TestReleaseCta hasVerifiedContact={hasVerified} />
+            <TestReleaseCta hasContact={hasAnyContact} />
 
             <div className="wizard__actions">
               <button type="submit" className="button" disabled={armPhase.kind === "working"}>

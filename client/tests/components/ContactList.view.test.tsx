@@ -23,8 +23,8 @@ describe("ContactList — view (US1)", () => {
 
   it("renders a list item per contact", async () => {
     getContactsMock.mockResolvedValue([
-      { id: "1", type: "email", value: "alice@example.com", createdAt: "2026-06-07T10:00:00.000Z", verified: false, verifiedAt: null },
-      { id: "2", type: "email", value: "Bob@Example.com", createdAt: "2026-06-07T10:01:00.000Z", verified: false, verifiedAt: null },
+      { id: "1", type: "email", value: "alice@example.com", createdAt: "2026-06-07T10:00:00.000Z" },
+      { id: "2", type: "email", value: "Bob@Example.com", createdAt: "2026-06-07T10:01:00.000Z" },
     ]);
     render(<ContactList />);
 

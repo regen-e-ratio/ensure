@@ -3,18 +3,6 @@ import Database from "better-sqlite3";
 export type Db = Database.Database;
 
 /**
- * Add a column to a table only when it is not already present, so the same `openDb` runs
- * cleanly against a fresh database and one created before the column existed (idempotent
- * migration). SQLite has no `ADD COLUMN IF NOT EXISTS`, so we inspect the table info first.
- */
-function addColumnIfMissing(db: Db, table: string, column: string, type: string): void {
-  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-  if (!cols.some((c) => c.name === column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type};`);
-  }
-}
-
-/**
  * Open a SQLite database at the given path (use ":memory:" for tests) and ensure
  * the schema exists. The `note` table is keyed by `user_id` (PRIMARY KEY), which
  * enforces one note per owner at the database level (FR-001, FR-018) and ties every
@@ -73,18 +61,6 @@ export function openDb(path: string): Db {
     );
 
     CREATE INDEX IF NOT EXISTS idx_contact_user_id ON contact(user_id);
-  `);
-
-  // Feature 009 — contact verification. Add the three nullable columns idempotently so a
-  // fresh DB and a pre-existing DB converge; every pre-existing row keeps a null verified_at
-  // and is therefore unverified by default (no backfill). The partial index backs the public
-  // look-up-by-hash on /api/contact/verify.
-  addColumnIfMissing(db, "contact", "verified_at", "TEXT");
-  addColumnIfMissing(db, "contact", "verification_token_hash", "TEXT");
-  addColumnIfMissing(db, "contact", "verification_expires_at", "TEXT");
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_contact_verification_hash
-      ON contact(verification_token_hash) WHERE verification_token_hash IS NOT NULL;
   `);
 
   db.exec(`

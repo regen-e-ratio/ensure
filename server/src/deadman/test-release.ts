@@ -2,7 +2,7 @@ import type { Db } from "../db/index";
 import type { EmailProvider } from "../notifications/channels/email/provider";
 import { buildRegistry } from "../notifications/registry";
 import { notify } from "../notifications/notifier";
-import { listVerifiedContacts } from "../db/contact-repo";
+import { listContacts } from "../db/contact-repo";
 import { buildReleaseEmail } from "./release-email";
 import { deliverRelease, type ReleaseDeps, type ReleaseRecipient } from "./engine";
 
@@ -15,12 +15,12 @@ export interface TestReleaseDeps {
 
 /**
  * Run a manual test-release for `userId` (feature 010, US3): if the caller has at least one
- * verified contact, create a `manual_test` release, mint one one-time grant per OWN verified
- * contact, and email each a tokenized `${appBaseUrl}/r/<token>` link via the generic notify()
- * dispatcher (recording per-grant email status). It NEVER changes switch state. Returns the
- * number of grants created (0 when the caller has no verified contact, so the route can 409
- * without creating an empty release). The keyring is unused on send (decrypt happens on open);
- * it is accepted so the deps mirror the engine's release deps for future symmetry.
+ * contact, create a `manual_test` release, mint one one-time grant per OWN contact, and email
+ * each a tokenized `${appBaseUrl}/r/<token>` link via the generic notify() dispatcher (recording
+ * per-grant email status). It NEVER changes switch state. Returns the number of grants created
+ * (0 when the caller has no contact, so the route can 409 without creating an empty release).
+ * The keyring is unused on send (decrypt happens on open); it is accepted so the deps mirror the
+ * engine's release deps for future symmetry.
  */
 export async function runTestRelease(
   db: Db,
@@ -28,16 +28,16 @@ export async function runTestRelease(
   userId: string,
   nowIso: string,
 ): Promise<number> {
-  // Snapshot the caller's own verified contacts first; with none, create nothing.
-  const verified = listVerifiedContacts(db, userId);
-  if (verified.length === 0) {
+  // Snapshot the caller's own contacts first; with none, create nothing.
+  const contacts = listContacts(db, userId);
+  if (contacts.length === 0) {
     return 0;
   }
 
   const registry = buildRegistry(deps.emailProvider);
   const release: ReleaseDeps = {
-    listVerifiedContacts: (id: string): ReleaseRecipient[] =>
-      listVerifiedContacts(db, id).map((c) => ({ contactId: c.id, address: c.value })),
+    listContacts: (id: string): ReleaseRecipient[] =>
+      listContacts(db, id).map((c) => ({ contactId: c.id, address: c.value })),
     sendReleaseEmail: async (recipient: string, token: string): Promise<string | null> => {
       const email = buildReleaseEmail(deps.appBaseUrl, token, recipient);
       const result = await notify(registry, {

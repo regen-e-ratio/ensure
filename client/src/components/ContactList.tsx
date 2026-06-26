@@ -5,7 +5,6 @@ import {
   addContact,
   getContacts,
   removeContact,
-  verifyContact,
   type Contact,
 } from "../api/contactClient";
 import { EmptyState } from "./EmptyState";
@@ -23,10 +22,6 @@ export function ContactList() {
   const [value, setValue] = useState("");
   const [status, setStatus] = useState<Status>({ kind: "loading" });
   const [removingId, setRemovingId] = useState<string | null>(null);
-  const [verifyingId, setVerifyingId] = useState<string | null>(null);
-  const [verifyStatus, setVerifyStatus] = useState<
-    { kind: "idle" } | { kind: "sent" } | { kind: "error"; message: string }
-  >({ kind: "idle" });
 
   // US1: load the caller's contacts on mount.
   useEffect(() => {
@@ -85,24 +80,6 @@ export function ContactList() {
     }
   }
 
-  // Feature 009: send (or resend) a verification email for a contact.
-  async function handleVerify(id: string) {
-    setVerifyingId(id);
-    setVerifyStatus({ kind: "idle" });
-    try {
-      await verifyContact(id);
-      setVerifyStatus({ kind: "sent" });
-    } catch (error) {
-      const message =
-        error instanceof ApiError
-          ? error.message
-          : "Could not send the verification email. Please try again.";
-      setVerifyStatus({ kind: "error", message });
-    } finally {
-      setVerifyingId(null);
-    }
-  }
-
   const isEmptyState = loaded && contacts.length === 0;
 
   return (
@@ -119,7 +96,7 @@ export function ContactList() {
         <EmptyState
           id="contacts-empty"
           title="No contacts yet"
-          hint="Add an email address below, then verify it — only verified contacts can ever receive your note."
+          hint="Add an email address below — your contacts receive your note if your switch ever fires."
         />
       ) : null}
 
@@ -128,28 +105,6 @@ export function ContactList() {
           {contacts.map((contact) => (
             <li key={contact.id} className="contact-list__item">
               <span className="contact-list__value">{contact.value}</span>
-              <span
-                className={`badge ${contact.verified ? "badge--verified" : "badge--unverified"}`}
-              >
-                {contact.verified ? "Verified" : "Not verified"}
-              </span>
-              <button
-                type="button"
-                className="button button--ghost"
-                onClick={() => void handleVerify(contact.id)}
-                disabled={verifyingId === contact.id}
-                aria-label={
-                  contact.verified
-                    ? `Resend verification to ${contact.value}`
-                    : `Send verification to ${contact.value}`
-                }
-              >
-                {verifyingId === contact.id
-                  ? "Sending…"
-                  : contact.verified
-                    ? "Resend"
-                    : "Send verification"}
-              </button>
               <button
                 type="button"
                 className="button button--ghost"
@@ -163,16 +118,6 @@ export function ContactList() {
           ))}
         </ul>
       ) : null}
-
-      {verifyStatus.kind === "error" ? (
-        <p className="status status--error" role="alert">
-          {verifyStatus.message}
-        </p>
-      ) : (
-        <p className="status" role="status" aria-live="polite">
-          {verifyStatus.kind === "sent" ? "Verification email sent." : ""}
-        </p>
-      )}
 
       <form onSubmit={handleAdd}>
         <label htmlFor="contact-email">Email address</label>

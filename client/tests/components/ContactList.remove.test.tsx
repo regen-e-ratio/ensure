@@ -20,8 +20,6 @@ beforeEach(() => {
       type: "email",
       value: "alice@example.com",
       createdAt: "2026-06-07T10:00:00.000Z",
-      verified: false,
-      verifiedAt: null,
     },
   ]);
 });

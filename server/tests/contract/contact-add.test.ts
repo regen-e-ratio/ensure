@@ -24,11 +24,7 @@ describe("POST /api/contact contract (US2)", () => {
       "id",
       "type",
       "value",
-      "verified",
-      "verifiedAt",
     ]);
-    expect(res.body.verified).toBe(false);
-    expect(res.body.verifiedAt).toBeNull();
     expect(res.body.value).toBe("Alice@Example.com");
     expect(res.body.id).toBeTruthy();
   });

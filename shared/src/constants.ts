@@ -47,15 +47,8 @@ export const DEADMAN_DEFAULT_GRACE_SECONDS = 172_800; // 2 days
 export const DEADMAN_MAX_GRACE_REMINDERS = 3;
 
 /**
- * Lifetime of a contact verification token, in seconds (feature 009, FR-013). 24 hours:
- * short-lived and single-use. Shared so the server stamps `verification_expires_at` and
- * the client/tests reason about the same window.
- */
-export const CONTACT_VERIFICATION_TTL_SECONDS = 86_400; // 24 hours
-
-/**
  * Lifetime of a release-grant token, in seconds (feature 010). 30 days: a one-time,
- * time-limited link emailed to each verified contact when the switch fires. Shared so the
+ * time-limited link emailed to each contact when the switch fires. Shared so the
  * server stamps `expires_at` on each grant and the tests/client reason about the same
  * window. The grant is also single-use (consumed when `viewed_at` is set, view-once).
  */
