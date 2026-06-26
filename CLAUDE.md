@@ -30,3 +30,10 @@ the final arbiter and can proceed with `git commit --no-verify`.
 # Implementation
 
 If you create a plan/documentation/roadmap/worflow when implementing a feature create a file in the specs folder
+
+# Local dev servers & e2e
+
+The Playwright e2e suite (`npm run test:e2e`) boots its own server + client on ports 3000/5173. If a
+`dev:server`/`dev:client` session is already holding those ports, you may stop it so e2e can run —
+no need to ask first. Kill the `tsx src/server.ts` and `vite` processes (e.g. by their listening
+ports) before launching e2e.
