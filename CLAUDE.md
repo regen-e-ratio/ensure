@@ -1,9 +1,3 @@
-<!-- SPECKIT START -->
-For additional context about technologies to be used, project structure,
-shell commands, and other important information, read the current plan
-at specs/007-stub-debug-logging/plan.md
-<!-- SPECKIT END -->
-
 ## README maintenance
 
 `README.md` is the single source of operational truth. Keep it lean and current.
@@ -31,3 +25,8 @@ contract lives in `contracts/openapi.yaml`). Such content belongs in `specs/**`,
 A `.githooks/pre-commit` hook (`scripts/readme-relevance.mjs`, activated by the `prepare` script)
 reminds you when a README-relevant change isn't accompanied by a README update; the author remains
 the final arbiter and can proceed with `git commit --no-verify`.
+
+
+# Implementation
+
+If you create a plan/documentation/roadmap/worflow when implementing a feature create a file in the specs folder
