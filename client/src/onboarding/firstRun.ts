@@ -11,12 +11,12 @@ import type { Contact } from "../api/contactClient";
  */
 
 /** The ordered wizard steps. `done` means every prerequisite is satisfied / the switch is armed. */
-export type WizardStep = "write-note" | "verify-contact" | "set-interval-grace" | "done";
+export type WizardStep = "write-note" | "add-contact" | "set-interval-grace" | "done";
 
 /** The fixed step order the wizard walks (and the help relaunches into). */
 export const WIZARD_STEPS: readonly WizardStep[] = [
   "write-note",
-  "verify-contact",
+  "add-contact",
   "set-interval-grace",
 ] as const;
 
@@ -48,22 +48,22 @@ export function hasArmedEvent(events: DeadmanEvent[]): boolean {
   return events.some((e) => e.type === "armed");
 }
 
-/** Whether at least one of the caller's contacts is verified (a release prerequisite). */
-export function hasVerifiedContact(contacts: Contact[]): boolean {
-  return contacts.some((c) => c.verified);
+/** Whether the caller has at least one contact (a release prerequisite). */
+export function hasContact(contacts: Contact[]): boolean {
+  return contacts.length > 0;
 }
 
 /**
- * The first incomplete step for a resuming never-armed user (FR-003): write a note → add & verify
- * a contact → set interval/grace & arm. Returns `done` when all prerequisites are met / armed.
+ * The first incomplete step for a resuming never-armed user (FR-003): write a note → add a
+ * contact → set interval/grace & arm. Returns `done` when all prerequisites are met / armed.
  */
 export function nextIncompleteStep(
   hasNote: boolean,
-  hasVerified: boolean,
+  hasAnyContact: boolean,
   isArmed: boolean,
 ): WizardStep {
   if (!hasNote) return "write-note";
-  if (!hasVerified) return "verify-contact";
+  if (!hasAnyContact) return "add-contact";
   if (!isArmed) return "set-interval-grace";
   return "done";
 }

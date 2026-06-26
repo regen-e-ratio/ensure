@@ -34,9 +34,9 @@ export async function resetDeadman(page: Page): Promise<void> {
 }
 
 /**
- * Read back the emails the server captured (feature 009 verification round-trip). Mounted
+ * Read back the emails the server captured (e.g. the release-delivery round-trip). Mounted
  * behind the same NOTE_ALLOW_TEST_RESET gate as the reset seam — never in production. Returns
- * the captured messages (most recent last) so a spec can extract the verification link.
+ * the captured messages (most recent last) so a spec can extract an emailed link.
  */
 export async function capturedEmails(
   page: Page,

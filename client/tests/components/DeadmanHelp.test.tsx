@@ -25,8 +25,8 @@ describe("DeadmanHelp — in-app explainer (US3)", () => {
     // Both check-in paths.
     expect(text).toMatch(/check in/i);
     expect(text).toMatch(/email/i);
-    // Verified-contacts-only one-time release.
-    expect(text).toMatch(/verified/i);
+    // One-time release to contacts.
+    expect(text).toMatch(/contacts/i);
     expect(text).toMatch(/once/i);
     // Disarm/pause + safeguards.
     expect(text).toMatch(/disarm|pause/i);

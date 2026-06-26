@@ -43,16 +43,12 @@ const DISARMED: DeadmanStatus = {
   events: [],
 };
 
-const VERIFIED_CONTACT: Contact = {
+const CONTACT: Contact = {
   id: "c1",
   type: "email",
   value: "me@example.com",
-  verified: true,
-  verifiedAt: "2026-06-20T00:00:00Z",
   createdAt: "2026-06-20T00:00:00Z",
-} as Contact;
-
-const UNVERIFIED_CONTACT: Contact = { ...VERIFIED_CONTACT, verified: false, verifiedAt: null } as Contact;
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -63,8 +59,8 @@ beforeEach(() => {
 });
 
 describe("OnboardingWizard — test-release preview CTA (US2)", () => {
-  it("calls testRelease and confirms accessibly when a verified contact exists", async () => {
-    getContactsMock.mockResolvedValue([VERIFIED_CONTACT]);
+  it("calls testRelease and confirms accessibly when a contact exists", async () => {
+    getContactsMock.mockResolvedValue([CONTACT]);
     testReleaseMock.mockResolvedValue(1);
     const user = userEvent.setup();
     render(<OnboardingWizard />);
@@ -81,18 +77,18 @@ describe("OnboardingWizard — test-release preview CTA (US2)", () => {
     expect(confirmation.closest('[role="status"]')).not.toBeNull();
   });
 
-  it("disables/guards the CTA with an explanation and does NOT call when no verified contact", async () => {
-    getContactsMock.mockResolvedValue([UNVERIFIED_CONTACT]);
+  it("disables/guards the CTA with an explanation and does NOT call when no contact", async () => {
+    getContactsMock.mockResolvedValue([]);
     render(<OnboardingWizard />);
 
     const cta = await screen.findByRole("button", { name: /send myself a test release/i });
     expect(cta).toBeDisabled();
-    expect(screen.getByText(/verified contact/i)).toBeInTheDocument();
+    expect(screen.getByText(/add a contact first/i)).toBeInTheDocument();
     expect(testReleaseMock).not.toHaveBeenCalled();
   });
 
   it("surfaces a failure via role=alert without claiming success", async () => {
-    getContactsMock.mockResolvedValue([VERIFIED_CONTACT]);
+    getContactsMock.mockResolvedValue([CONTACT]);
     testReleaseMock.mockRejectedValue(new ApiError("Could not send a test release."));
     const user = userEvent.setup();
     render(<OnboardingWizard />);
@@ -107,7 +103,7 @@ describe("OnboardingWizard — test-release preview CTA (US2)", () => {
   });
 
   it("renders NO token, grant, or note plaintext in the confirmation (FR-007/FR-017)", async () => {
-    getContactsMock.mockResolvedValue([VERIFIED_CONTACT]);
+    getContactsMock.mockResolvedValue([CONTACT]);
     getNoteMock.mockResolvedValue({ text: "SECRET-NOTE-PLAINTEXT", updatedAt: "x" } as never);
     testReleaseMock.mockResolvedValue(1);
     const user = userEvent.setup();

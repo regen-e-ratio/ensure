@@ -3,7 +3,7 @@ import { openDb, type Db } from "../../src/db/index";
 import { createKeyring } from "../../src/crypto/keyring";
 import { runTestRelease } from "../../src/deadman/test-release";
 import { upsertConfig, getConfig } from "../../src/deadman/config-repo";
-import { addContact, markVerified } from "../../src/db/contact-repo";
+import { addContact } from "../../src/db/contact-repo";
 import type { EmailMessage, EmailProvider, ProviderResult } from "../../src/notifications/channels/email/provider";
 
 const KEYRING = createKeyring(`1:${Buffer.alloc(32, 7).toString("base64")}`, "1");
@@ -35,9 +35,8 @@ beforeEach(() => {
 });
 
 describe("runTestRelease (feature 010, US3)", () => {
-  it("creates a manual_test release + grant to the owner's verified contact, emails a link", async () => {
-    const c = addContact(db, "owner", "email", "owner-addr@example.com");
-    markVerified(db, c.id, NOW);
+  it("creates a manual_test release + grant to the owner's contact, emails a link", async () => {
+    addContact(db, "owner", "email", "owner-addr@example.com");
 
     const grants = await runTestRelease(db, DEPS(), "owner", NOW);
     expect(grants).toBe(1);
@@ -57,29 +56,25 @@ describe("runTestRelease (feature 010, US3)", () => {
     upsertConfig(db, "owner", { checkinIntervalSeconds: 604800, gracePeriodSeconds: 172800, enabled: true }, NOW);
     const before = getConfig(db, "owner");
 
-    const c = addContact(db, "owner", "email", "owner-addr@example.com");
-    markVerified(db, c.id, NOW);
+    addContact(db, "owner", "email", "owner-addr@example.com");
     await runTestRelease(db, DEPS(), "owner", NOW);
 
     expect(getConfig(db, "owner")?.state).toBe(before?.state);
     expect(getConfig(db, "owner")?.state).toBe("active");
   });
 
-  it("returns 0 and creates nothing when the caller has no verified contact", async () => {
-    addContact(db, "owner", "email", "unverified@example.com"); // not verified
+  it("returns 0 and creates nothing when the caller has no contact", async () => {
     const grants = await runTestRelease(db, DEPS(), "owner", NOW);
     expect(grants).toBe(0);
     expect((db.prepare("SELECT COUNT(*) AS n FROM release").get() as { n: number }).n).toBe(0);
     expect(provider.sent).toHaveLength(0);
   });
 
-  it("snapshots only the caller's own verified contacts", async () => {
+  it("snapshots only the caller's own contacts", async () => {
     seedUser("other");
-    const otherContact = addContact(db, "other", "email", "other@example.com");
-    markVerified(db, otherContact.id, NOW);
+    addContact(db, "other", "email", "other@example.com");
 
-    const own = addContact(db, "owner", "email", "own@example.com");
-    markVerified(db, own.id, NOW);
+    addContact(db, "owner", "email", "own@example.com");
 
     await runTestRelease(db, DEPS(), "owner", NOW);
     expect(provider.sent.map((m) => m.to)).toEqual(["own@example.com"]);

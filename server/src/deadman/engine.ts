@@ -45,7 +45,7 @@ export interface ReminderMessage {
   body: string;
 }
 
-/** A snapshotted release recipient: a verified contact's id + its address. */
+/** A snapshotted release recipient: a contact's id + its address. */
 export interface ReleaseRecipient {
   contactId: string;
   address: string;
@@ -53,13 +53,13 @@ export interface ReleaseRecipient {
 
 /**
  * The release-delivery capability the engine needs on trigger (feature 010), injected so the
- * engine stays unit-testable with spies. `listVerifiedContacts` snapshots only verified contacts
- * (`verified_at != null`); `sendReleaseEmail` emails one tokenized `/r/<token>` link via the
- * generic `notify()` dispatcher and resolves with the provider message id (or throws on failure).
- * The raw token is passed here only to build the link — it is never stored or logged.
+ * engine stays unit-testable with spies. `listContacts` snapshots the owner's contacts;
+ * `sendReleaseEmail` emails one tokenized `/r/<token>` link via the generic `notify()` dispatcher
+ * and resolves with the provider message id (or throws on failure). The raw token is passed here
+ * only to build the link — it is never stored or logged.
  */
 export interface ReleaseDeps {
-  listVerifiedContacts: (userId: string) => ReleaseRecipient[];
+  listContacts: (userId: string) => ReleaseRecipient[];
   sendReleaseEmail: (recipient: string, token: string) => Promise<string | null>;
 }
 
@@ -224,7 +224,7 @@ async function sendReminder(
 }
 
 /**
- * Fire the switch (feature 010): create a release, snapshot the user's VERIFIED contacts, mint
+ * Fire the switch (feature 010): create a release, snapshot the user's contacts, mint
  * one one-time grant token per contact (storing only its hash), email each a tokenized link via
  * the injected notifier (recording per-grant `email_status`, a single failure never aborting the
  * batch), transition to `triggered`, and record `triggered` + `released` (grant count only, never
@@ -276,7 +276,7 @@ async function trigger(
 
 /**
  * Shared release delivery (used by the engine trigger and the manual test-release): create a
- * `release` of the given `trigger` kind, snapshot the owner's verified contacts, mint + hash one
+ * `release` of the given `trigger` kind, snapshot the owner's contacts, mint + hash one
  * grant token per contact, persist the grants (hash + 30-day expiry), and email each a tokenized
  * link via the injected notifier, recording per-grant `email_status`. A single send failure is
  * caught into `email_status='failed'` and never aborts the batch (others continue). Returns the
@@ -289,7 +289,7 @@ export async function deliverRelease(
   trigger: "schedule" | "manual_test",
   nowIso: string,
 ): Promise<number> {
-  const recipients = release.listVerifiedContacts(userId);
+  const recipients = release.listContacts(userId);
   if (recipients.length === 0) {
     // Still record an (empty) release so the cycle is marked released (idempotency) for a
     // scheduled fire; the caller decides whether to surface this.

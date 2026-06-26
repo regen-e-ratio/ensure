@@ -42,14 +42,12 @@ const DISARMED: DeadmanStatus = {
   events: [],
 };
 
-const VERIFIED_CONTACT: Contact = {
+const CONTACT: Contact = {
   id: "c1",
   type: "email",
   value: "me@example.com",
-  verified: true,
-  verifiedAt: "2026-06-20T00:00:00Z",
   createdAt: "2026-06-20T00:00:00Z",
-} as Contact;
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -68,20 +66,20 @@ describe("OnboardingWizard — step progress + resume (US1)", () => {
     expect(screen.getByRole("heading", { name: /step 1 — write your note/i })).toBeInTheDocument();
   });
 
-  it("resumes at the verify-contact step when a note exists but no verified contact", async () => {
+  it("resumes at the add-contact step when a note exists but no contact", async () => {
     getNoteMock.mockResolvedValue({ text: "bye", updatedAt: "2026-06-20T00:00:00Z" } as never);
     getContactsMock.mockResolvedValue([]);
     render(<OnboardingWizard />);
 
     // It skips the completed note step and lands on the contact step (step heading).
     expect(
-      await screen.findByRole("heading", { name: /step 2 — add (&|and) verify a contact/i }),
+      await screen.findByRole("heading", { name: /step 2 — add a contact/i }),
     ).toBeInTheDocument();
   });
 
-  it("resumes at the interval/grace step when a verified contact already exists", async () => {
+  it("resumes at the interval/grace step when a contact already exists", async () => {
     getNoteMock.mockResolvedValue({ text: "bye", updatedAt: "2026-06-20T00:00:00Z" } as never);
-    getContactsMock.mockResolvedValue([VERIFIED_CONTACT]);
+    getContactsMock.mockResolvedValue([CONTACT]);
     render(<OnboardingWizard />);
 
     expect(await screen.findByRole("heading", { name: /set up your dead-man switch/i })).toBeInTheDocument();
@@ -90,7 +88,7 @@ describe("OnboardingWizard — step progress + resume (US1)", () => {
 
   it("arms via putConfig after an explicit confirm, then moves to completion", async () => {
     getNoteMock.mockResolvedValue({ text: "bye", updatedAt: "2026-06-20T00:00:00Z" } as never);
-    getContactsMock.mockResolvedValue([VERIFIED_CONTACT]);
+    getContactsMock.mockResolvedValue([CONTACT]);
     putConfigMock.mockResolvedValue({ ...DISARMED, state: "active", enabled: true });
     const user = userEvent.setup();
     render(<OnboardingWizard />);
@@ -111,7 +109,7 @@ describe("OnboardingWizard — step progress + resume (US1)", () => {
   it("does not arm when the confirm is declined", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(false);
     getNoteMock.mockResolvedValue({ text: "bye", updatedAt: "2026-06-20T00:00:00Z" } as never);
-    getContactsMock.mockResolvedValue([VERIFIED_CONTACT]);
+    getContactsMock.mockResolvedValue([CONTACT]);
     const user = userEvent.setup();
     render(<OnboardingWizard />);
 

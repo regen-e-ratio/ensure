@@ -27,17 +27,11 @@ describe("POST /api/deadman/test-release contract (feature 010, US3)", () => {
     cookies = await loginTestUser(app);
   });
 
-  async function addVerifiedContact(value: string): Promise<void> {
-    const add = await request(app).post("/api/contact").set("Cookie", cookies).send({ type: "email", value });
-    const id = add.body.id as string;
-    await request(app).post(`/api/contact/${id}/verify`).set("Cookie", cookies);
-    // Open the captured verification link to mark it verified.
-    const body = provider.sent[provider.sent.length - 1]!.text ?? "";
-    const token = decodeURIComponent(body.match(/contact-verified\?token=([A-Za-z0-9_%-]+)/)![1]!);
-    await request(app).get(`/api/contact/verify?token=${encodeURIComponent(token)}`);
+  async function addContact(value: string): Promise<void> {
+    await request(app).post("/api/contact").set("Cookie", cookies).send({ type: "email", value });
   }
 
-  it("with a verified contact → 200, a manual_test release + grant, email sent, state unchanged", async () => {
+  it("with a contact → 200, a manual_test release + grant, email sent, state unchanged", async () => {
     // Arm the switch first so we can assert state is unchanged.
     await request(app)
       .put("/api/deadman/config")
@@ -45,7 +39,7 @@ describe("POST /api/deadman/test-release contract (feature 010, US3)", () => {
       .send({ checkinIntervalSeconds: 604800, gracePeriodSeconds: 172800, enabled: true });
     const stateBefore = (await request(app).get("/api/deadman").set("Cookie", cookies)).body.state;
 
-    await addVerifiedContact("me@example.com");
+    await addContact("me@example.com");
     const sentBefore = provider.sent.length;
 
     const res = await request(app).post("/api/deadman/test-release").set("Cookie", cookies);
@@ -56,7 +50,7 @@ describe("POST /api/deadman/test-release contract (feature 010, US3)", () => {
     const releases = db.prepare("SELECT trigger FROM release").all() as { trigger: string }[];
     expect(releases.some((r) => r.trigger === "manual_test")).toBe(true);
 
-    // An email went to the owner's own verified address.
+    // An email went to the owner's own address.
     expect(provider.sent.length).toBe(sentBefore + 1);
     expect(provider.sent[provider.sent.length - 1]!.to).toBe("me@example.com");
 
@@ -72,19 +66,17 @@ describe("POST /api/deadman/test-release contract (feature 010, US3)", () => {
     expect(provider.sent).toHaveLength(0);
   });
 
-  it("no verified contact → 409, no email", async () => {
-    // An unverified contact does not count.
-    await request(app).post("/api/contact").set("Cookie", cookies).send({ type: "email", value: "x@example.com" });
+  it("no contact → 409, no email", async () => {
     const res = await request(app).post("/api/deadman/test-release").set("Cookie", cookies);
     expect(res.status).toBe(409);
-    expect(res.body.error).toBe("NO_VERIFIED_CONTACT");
+    expect(res.body.error).toBe("NO_CONTACT");
     expect(db.prepare("SELECT COUNT(*) AS n FROM release").get()).toEqual({ n: 0 });
   });
 
   it("the test-release email link can be opened once to read the note", async () => {
-    // Owner writes a note + has a verified contact.
+    // Owner writes a note + has a contact.
     await request(app).put("/api/note").set("Cookie", cookies).send({ text: "preview me" });
-    await addVerifiedContact("me@example.com");
+    await addContact("me@example.com");
     await request(app).post("/api/deadman/test-release").set("Cookie", cookies);
 
     const body = provider.sent[provider.sent.length - 1]!.text ?? "";

@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * model. Reachable from the dashboard regardless of first-run state. A trigger button opens a
  * dismissible panel (Escape + a labelled close control, with focus moved to the heading and returned
  * to the trigger on close) describing the `disarmed → active → grace → triggered` state machine, the
- * two check-in paths, the verified-contacts-only one-time secure release, instant disarm/pause, and
+ * two check-in paths, the one-time secure release to contacts, instant disarm/pause, and
  * the anti-premature-trigger safeguards. It offers a control to (re-)launch the guided wizard. It
  * carries NO secret, token, or note plaintext — purely explanatory content (FR-008, FR-017).
  */
@@ -62,8 +62,7 @@ export function DeadmanHelp({ onRelaunchWizard }: DeadmanHelpProps) {
 
           <p>
             A dead-man switch quietly confirms you are still around. If you stop checking in, it
-            releases your note to the verified contacts you chose — and nothing is revealed until
-            then.
+            releases your note to the contacts you chose — and nothing is revealed until then.
           </p>
 
           <h3>The states your switch moves through</h3>
@@ -80,7 +79,7 @@ export function DeadmanHelp({ onRelaunchWizard }: DeadmanHelpProps) {
             </li>
             <li>
               <strong>Triggered</strong> — the grace period also lapsed. Your note is released to your
-              verified contacts.
+              contacts.
             </li>
           </ul>
 
@@ -93,10 +92,9 @@ export function DeadmanHelp({ onRelaunchWizard }: DeadmanHelpProps) {
 
           <h3>What your contacts receive</h3>
           <p>
-            Only <strong>verified</strong> contacts ever receive anything. When the switch fires, each
-            gets an email with a secure link that reveals your note exactly <strong>once</strong>;
-            after it is opened the link stops working. You can preview this safely with
-            &ldquo;send myself a test release&rdquo; before you ever arm.
+            When the switch fires, each contact gets an email with a secure link that reveals your
+            note exactly <strong>once</strong>; after it is opened the link stops working. You can
+            preview this safely with &ldquo;send myself a test release&rdquo; before you ever arm.
           </p>
 
           <h3>You are always in control</h3>

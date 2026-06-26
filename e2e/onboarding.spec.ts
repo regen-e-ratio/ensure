@@ -1,9 +1,9 @@
 import { test, expect } from "@playwright/test";
-import { loginAs, resetDeadman, capturedEmails } from "./support/auth";
+import { loginAs, resetDeadman } from "./support/auth";
 
 /**
  * Feature 012 (US1) — the guided first-run flow, end to end. A fresh (never-armed) user is offered
- * the dismissible wizard on the dashboard and is walked through write a note → add & verify a contact
+ * the dismissible wizard on the dashboard and is walked through write a note → add a contact
  * → set interval/grace → confirm arm, after which the switch is `active` and the wizard steps aside.
  * A second spec covers the dismiss path. Each step drives an EXISTING endpoint (no new backend); the
  * suite keeps `DEADMAN_TICK_DISABLED=1` (playwright.config) and reuses the AUTH/DEADMAN test seams.
@@ -13,7 +13,7 @@ test.beforeEach(async ({ page }) => {
   await resetDeadman(page);
 });
 
-test("first-run wizard: note → verify contact → arm → active, wizard steps aside", async ({
+test("first-run wizard: note → add contact → arm → active, wizard steps aside", async ({
   page,
 }) => {
   await loginAs(page, { sub: "e2e-onboard", email: "onboard@example.com", name: "Ona" });
@@ -35,31 +35,16 @@ test("first-run wizard: note → verify contact → arm → active, wizard steps
   await expect(page.getByText(/^saved\.$/i)).toBeVisible();
   await page.getByRole("button", { name: /i've saved my note — continue/i }).click();
 
-  // Step 2 — add & verify a contact (drives POST /api/contact + the verify round-trip).
+  // Step 2 — add a contact (drives POST /api/contact).
   await expect(
-    page.getByRole("heading", { name: /step 2 — add (&|and) verify a contact/i }),
+    page.getByRole("heading", { name: /step 2 — add a contact/i }),
   ).toBeVisible();
   await page.getByLabel(/email address/i).fill("trusted@example.com");
   await page.getByRole("button", { name: /^add$/i }).click();
   await expect(page.getByText("trusted@example.com")).toBeVisible();
+  await page.getByRole("button", { name: /i've added a contact — continue/i }).click();
 
-  await page
-    .getByRole("button", { name: /send verification to trusted@example.com/i })
-    .click();
-  await expect(page.getByText(/verification email sent/i)).toBeVisible();
-
-  // Open the verification link captured from the stub email (public page, no session needed).
-  const emails = await capturedEmails(page);
-  const email = emails.find((e) => e.to === "trusted@example.com");
-  expect(email, "a verification email was captured").toBeTruthy();
-  const body = email!.text ?? email!.html ?? "";
-  const match = body.match(/\/contact-verified\?token=[A-Za-z0-9_%-]+/);
-  expect(match, "the email body carries a verification link").toBeTruthy();
-  await page.goto(match![0]);
-  await expect(page.getByRole("heading", { name: /your email is confirmed/i })).toBeVisible();
-
-  // Back on the dashboard, the wizard resumes at step 3 (a verified contact now exists).
-  await page.goto("/deadman");
+  // The wizard resumes at step 3 (a contact now exists).
   await expect(page.getByRole("heading", { name: /step 3 — set your schedule (&|and) arm/i })).toBeVisible();
 
   // Step 3 — arm (form defaults are within bounds; the confirm dialog is auto-accepted).

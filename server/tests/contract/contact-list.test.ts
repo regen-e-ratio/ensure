@@ -39,8 +39,6 @@ describe("GET /api/contact contract (US1)", () => {
       "id",
       "type",
       "value",
-      "verified",
-      "verifiedAt",
     ]);
     expect(contact.type).toBe("email");
     expect(typeof contact.id).toBe("string");

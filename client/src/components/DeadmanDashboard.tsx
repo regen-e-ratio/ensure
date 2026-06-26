@@ -14,7 +14,7 @@ import {
   type DeadmanEvent,
 } from "../api/deadmanClient";
 import { getContacts } from "../api/contactClient";
-import { hasVerifiedContact } from "../onboarding/firstRun";
+import { hasContact } from "../onboarding/firstRun";
 import { formatCountdown } from "../onboarding/countdown";
 import { EmptyState } from "./EmptyState";
 import { TestReleaseCta } from "./TestReleaseCta";
@@ -61,8 +61,8 @@ function formatTime(iso: string | null): string {
 export function DeadmanDashboard() {
   const [status, setStatus] = useState<DeadmanStatus | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
-  // Whether the caller has a verified contact (guards the test-release preview CTA, US2).
-  const [hasVerified, setHasVerified] = useState(false);
+  // Whether the caller has a contact (guards the test-release preview CTA, US2).
+  const [hasAnyContact, setHasAnyContact] = useState(false);
 
   // Form fields (seconds), seeded from the loaded status (defaults for a new switch).
   const [interval, setIntervalSeconds] = useState<number>(CHECKIN_INTERVAL_MIN_SECONDS);
@@ -104,10 +104,10 @@ export function DeadmanDashboard() {
     // only leaves the preview CTA guarded.
     getContacts()
       .then((list) => {
-        if (active) setHasVerified(hasVerifiedContact(list));
+        if (active) setHasAnyContact(hasContact(list));
       })
       .catch(() => {
-        if (active) setHasVerified(false);
+        if (active) setHasAnyContact(false);
       });
     return () => {
       active = false;
@@ -308,11 +308,11 @@ export function DeadmanDashboard() {
         <p className="status" role="status" aria-live="polite" />
       )}
 
-      {/* Preview the recipient experience (feature 010 test-release), guarded on a verified
+      {/* Preview the recipient experience (feature 010 test-release), guarded on having a
           contact (feature 012 US2). Reachable here outside the onboarding wizard too. */}
       <section aria-labelledby="deadman-preview-heading">
         <h3 id="deadman-preview-heading">Preview what your contacts will receive</h3>
-        <TestReleaseCta hasVerifiedContact={hasVerified} />
+        <TestReleaseCta hasContact={hasAnyContact} />
       </section>
 
       {/* Recent events (US3). */}
